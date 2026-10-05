@@ -41,6 +41,7 @@ function fakeSheet(name) {
 function load() {
   const sheets = {};
   const cache = {};
+  const mail = [];
   const ss = {
     getSheetByName: (n) => sheets[n] || null,
     insertSheet: (n) => (sheets[n] = fakeSheet(n)),
@@ -52,7 +53,18 @@ function load() {
     ContentService: { createTextOutput: (s) => ({ setMimeType: () => JSON.parse(s) }), MimeType: { JSON: 'json' } },
     LockService: { getScriptLock: () => ({ waitLock() {}, releaseLock() {} }) },
     CacheService: { getScriptCache: () => ({ get: (k) => cache[k] || null, put: (k, v) => { cache[k] = v; }, remove: (k) => delete cache[k] }) },
-    Utilities: { formatDate: (d) => d.toISOString().slice(0, 10) },
+    // Nairobi is UTC+3 all year.
+    Utilities: {
+      formatDate: (d, tz, pat) => {
+        const n = new Date(d.getTime() + 3 * 3600e3);
+        const months = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+        if (pat === 'H') return String(n.getUTCHours());
+        if (pat === 'MMMM') return months[n.getUTCMonth()];
+        if (pat === 'd MMM') return n.getUTCDate() + ' ' + months[n.getUTCMonth()].slice(0, 3);
+        return n.toISOString().slice(0, 10);
+      },
+    },
+    MailApp: { sendEmail: (to, subject, body) => mail.push({ to, subject, body }) },
     Math, Date, JSON, String, Number, isFinite, Object, Array,
   };
   vm.createContext(ctx);
@@ -62,7 +74,7 @@ function load() {
   sheets.workers.rows[2] = ['Otieno', '1111', 'no', ''];
   sheets.workers.rows[3] = ['Kalondu', '2222', 'yes', ''];
   const post = (body) => ctx.doPost({ postData: { contents: JSON.stringify(body) } });
-  return { ctx, sheets, post };
+  return { ctx, sheets, post, mail };
 }
 
 const sale = (id, extra = {}) => Object.assign({ id, date: '2026-10-05', type: 'sale', itemId: 'honey-1kg', qty: 2, from: 'nairobi', to: '', price: 1700, worker: 'Someone else', note: '', at: '2026-10-05T10:00:00Z' }, extra);
@@ -184,7 +196,63 @@ test('an older sheet gets the new columns without losing rows', () => {
   sheets.movements.rows.splice(0, sheets.movements.rows.length, ['movementId', 'date', 'type', 'itemId', 'itemName', 'qty', 'unit', 'from', 'to', 'price', 'amount', 'worker', 'note', 'at', 'receivedAt']);
   assert.deepEqual(post({ action: 'save', ...kalondu, movements: [sale('old1')] }).saved, ['old1']);
   ctx.setup();
-  assert.equal(sheets.workers.rows[0].join(','), 'name,pin,active,role');
+  assert.equal(sheets.workers.rows[0].join(','), 'name,pin,active,role,email,place');
   assert.equal(sheets.movements.rows[0].slice(-4).join(','), 'lat,lon,accuracyM,distanceM');
   assert.equal(post({ action: 'data', ...kalondu }).movements[0].id, 'old1');
+});
+
+// Workers for reminder tests: Kalondu at Kiunduani, Otieno at Nairobi (by name), Mwende the manager.
+function withPlaces(env) {
+  const w = env.sheets.workers;
+  const col = (h) => w.rows[0].indexOf(h);
+  const set = (row, h, v) => { w.rows[row][col(h)] = v; };
+  set(1, 'email', 'mwende@example.com');
+  set(3, 'email', 'kalondu@example.com'); set(3, 'place', 'kiunduani');
+  w.rows[4] = ['Otieno Juma', '3333', 'yes', '', 'otieno@example.com', 'Nairobi Shop'];
+  return env;
+}
+const nairobi = (iso) => new Date(new Date(iso + '+03:00').getTime());
+
+test('evening: each shop with no sales today emails its own workers; the manager gets a summary', () => {
+  const env = withPlaces(load());
+  env.post({ action: 'save', ...mwende, movements: [sale('k1', { from: 'kiunduani', date: '2026-10-05' })] });
+  const sent = env.ctx.reminders_(nairobi('2026-10-05T18:02:00'));
+  assert.deepEqual(JSON.parse(JSON.stringify(sent)), [
+    { to: 'otieno@example.com', kind: 'sales', place: 'nairobi' },
+    { to: 'mwende@example.com', kind: 'summary' },
+  ]);
+  assert.match(env.mail[0].subject, /Nairobi Shop/);
+  assert.match(env.mail[0].body, /Hello Otieno,/);
+  assert.match(env.mail[0].body, /https:\/\/jstats\.github\.io\/Farm-to-shop-inventory\//);
+  assert.match(env.mail[1].body, /Nairobi Shop: no sales recorded today \(reminded Otieno Juma\)/);
+});
+
+test('morning on an ordinary day sends nothing; before any use nothing at all', () => {
+  const env = withPlaces(load());
+  assert.deepEqual(env.ctx.reminders_(nairobi('2026-10-31T18:00:00')).length, 0); // no movements yet
+  env.post({ action: 'save', ...mwende, movements: [sale('k1', { from: 'kiunduani', date: '2026-10-05' })] });
+  assert.equal(env.ctx.reminders_(nairobi('2026-10-05T09:01:00')).length, 0);
+});
+
+test('last day of the month: places not counted are reminded morning and evening', () => {
+  const env = withPlaces(load());
+  env.post({ action: 'save', ...mwende, movements: [
+    sale('c1', { type: 'count', from: '', to: 'nairobi', date: '2026-10-30', price: 0 }),
+    sale('c2', { type: 'count', from: '', to: 'kiunduani', date: '2026-09-30', price: 0 }), // last month: doesn't count
+  ] });
+  const morning = JSON.parse(JSON.stringify(env.ctx.reminders_(nairobi('2026-10-31T09:00:00'))));
+  assert.deepEqual(morning.filter((x) => x.kind === 'count'), [{ to: 'kalondu@example.com', kind: 'count', place: 'kiunduani' }]);
+  const summary = env.mail.find((m) => m.to === 'mwende@example.com').body;
+  assert.match(summary, /Farm: October count not done \(nobody reminded: no worker with an email has this place\)/);
+  assert.match(env.mail[0].subject, /October stock count at Kiunduani Shop/);
+  // Not the last day → no count reminders.
+  env.mail.length = 0;
+  assert.equal(env.ctx.reminders_(nairobi('2026-10-30T09:00:00')).length, 0);
+});
+
+test('sign-in returns the worker\'s place by id or by name', () => {
+  const env = withPlaces(load());
+  assert.equal(env.post({ action: 'data', name: 'Kalondu', pin: '2222' }).place, 'kiunduani');
+  assert.equal(env.post({ action: 'data', name: 'Otieno Juma', pin: '3333' }).place, 'nairobi');
+  assert.equal(env.post({ action: 'data', ...mwende }).place, '');
 });

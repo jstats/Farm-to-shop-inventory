@@ -108,3 +108,13 @@ test('checkPlace: sales and transfers at the source, counts and restocks where t
   assert.equal(Stock.checkPlace({ type: 'count', from: '', to: 'b' }), 'b');
   assert.equal(Stock.checkPlace({ type: 'restock', from: '', to: 'b' }), 'b');
 });
+
+test('reminder helpers: sales today and days left in the month', () => {
+  const ms = [mv('2026-10-05', 'sale', 'jar', 1, 'kiunduani', '', 350)];
+  assert.equal(Stock.soldOn(ms, 'kiunduani', '2026-10-05'), true);
+  assert.equal(Stock.soldOn(ms, 'nairobi', '2026-10-05'), false);
+  assert.equal(Stock.soldOn(ms, 'kiunduani', '2026-10-06'), false);
+  assert.equal(Stock.daysLeftInMonth('2026-10-31'), 0);
+  assert.equal(Stock.daysLeftInMonth('2026-10-29'), 2);
+  assert.equal(Stock.daysLeftInMonth('2028-02-28'), 1); // leap year
+});

@@ -185,8 +185,9 @@
       if (!res.ok) throw res;
       state.data = { items: res.items, locations: res.locations, movements: res.movements, fetchedAt: new Date().toISOString() };
       save('data', state.data);
-      if (state.profile.role !== res.role) {
+      if (state.profile.role !== res.role || state.profile.place !== res.place) {
         state.profile.role = res.role;
+        state.profile.place = res.place;
         save('profile', state.profile);
       }
       state.authError = false;
@@ -282,6 +283,7 @@
         if (!res.ok) throw res;
         state.profile.name = res.worker; // as spelled in the sheet
         state.profile.role = res.role;
+        state.profile.place = res.place;
         state.data = { items: res.items, locations: res.locations, movements: res.movements, fetchedAt: new Date().toISOString() };
         save('data', state.data);
         afterSignIn();
@@ -307,18 +309,27 @@
 
   // ---------- home ----------
   function renderHome(v) {
-    var s = Stock.summarise({ items: allItems(), locations: locations(), movements: movements() }, today());
-    var due = s.countDue.map(locName);
+    var mvts = movements();
+    var s = Stock.summarise({ items: allItems(), locations: locations(), movements: mvts }, today());
+    var mine = state.profile.place;
+    // Count: in the last 3 days of the month, for the worker's own place (or every place if they have none).
+    var due = Stock.daysLeftInMonth(today()) <= 2
+      ? s.countDue.filter(function (id) { return !mine || id === mine; }).map(locName) : [];
+    // Sales: from 4pm, if the worker's shop has nothing recorded today.
+    var shop = locations().filter(function (l) { return l.id === mine && l.role === 'shop'; })[0];
+    var noSales = shop && new Date().getHours() >= 16 && !Stock.soldOn(mvts, shop.id, today());
     var firstName = esc(state.profile.name.split(' ')[0]);
     v.innerHTML =
       '<h1>Hello, ' + firstName + '</h1>' +
       '<p class="muted">What are you recording?</p>' +
+      (noSales ? '<div class="banner warn" style="width:100%;margin:12px 0 0">🧾 No sales recorded for ' + esc(shop.name) +
+        ' today. If anything was sold, record it before you close.</div>' : '') +
       (due.length ? '<div class="banner warn" style="width:100%;margin:12px 0 0">📋 ' + esc(monthName(today().slice(0, 7), true)) +
         ' count not done yet: ' + esc(due.join(', ')) + '.</div>' : '') +
       '<div class="actions">' +
       Object.keys(TYPES).map(function (t) {
         var T = TYPES[t];
-        return '<button class="action' + (t === 'count' && due.length ? ' due' : '') + '" data-form="' + t + '">' +
+        return '<button class="action' + ((t === 'count' && due.length) || (t === 'sale' && noSales) ? ' due' : '') + '" data-form="' + t + '">' +
           '<span class="ico" aria-hidden="true">' + T.ico + '</span><b>' + T.title + '</b><span>' + T.hint + '</span></button>';
       }).join('') +
       '</div>' +

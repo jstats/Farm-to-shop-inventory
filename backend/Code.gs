@@ -7,7 +7,8 @@
  *                lat/lon = the place's GPS point (a manager sets it from the app); radiusM = how close a phone
  *                must be (default 200). A place with no lat/lon accepts entries from anywhere.
  *   workers    – who may sign in: name + PIN. Set active = no when someone leaves. role = manager may set
- *                places' GPS points from the app.
+ *                places' GPS points from the app and gets the reminder summary. email + place (the shop or farm
+ *                they work at) decide who gets which reminder.
  *   movements  – one row per captured movement. Never edit "movementId"; fix mistakes with a new count.
  *                lat/lon/accuracyM/distanceM = where the phone was when the entry was saved.
  *
@@ -16,6 +17,10 @@
  *
  * Location check: an entry for a place with a GPS point is refused unless the phone was within radiusM of it
  * (plus up to MAX_SLACK_M of the phone's reported accuracy). Same rule as placeCheck in docs/stock.js.
+ *
+ * Reminders: run setupReminders() once. Every day at 18:00 each shop with no sales recorded that day emails its
+ * workers; on the last day of the month (09:00 and 18:00) each place not yet counted that month emails its workers.
+ * Managers get one summary of who was reminded. Nothing is sent before the first movement is recorded.
  *
  * First time: run setup() once from the Apps Script editor, then Deploy → New deployment → Web app
  * (Execute as: Me, Who has access: Anyone). Put the web app URL in docs/config.js.
@@ -26,11 +31,15 @@ var DEFAULT_RADIUS_M = 200;
 var MAX_SLACK_M = 100;
 var MAX_ACCURACY_M = 500;
 var SET_POINT_MAX_ACCURACY_M = 100;  // a manager's fix must be at least this good to become a place's point
+var APP_URL = 'https://jstats.github.io/Farm-to-shop-inventory/';
+var TZ = 'Africa/Nairobi';
+var EVENING_HOUR = 18;  // daily sales reminder (and a second count reminder on the last day)
+var MORNING_HOUR = 9;   // first count reminder on the last day of the month
 
 var TABS = {
   items:     ['itemId', 'name', 'category', 'unit', 'price', 'reorderLevel', 'active'],
   locations: ['locationId', 'name', 'role', 'lat', 'lon', 'radiusM'],
-  workers:   ['name', 'pin', 'active', 'role'],
+  workers:   ['name', 'pin', 'active', 'role', 'email', 'place'],
   movements: ['movementId', 'date', 'type', 'itemId', 'itemName', 'qty', 'unit', 'from', 'to', 'price', 'amount',
               'worker', 'note', 'at', 'receivedAt', 'lat', 'lon', 'accuracyM', 'distanceM'],
 };
@@ -166,7 +175,7 @@ function signIn_(name, pin) {
     return { error: 'wrong_pin' };
   }
   cache.remove(key);
-  return { name: String(w.name).trim(), role: String(w.role || '').trim().toLowerCase() };
+  return { name: String(w.name).trim(), role: String(w.role || '').trim().toLowerCase(), place: placeId_(w.place) };
 }
 
 function data_() {
@@ -208,6 +217,7 @@ function doPost(e) {
     out.ok = true;
     out.worker = who.name;
     out.role = who.role;
+    out.place = who.place;
     return json_(out);
   }
   if (body.action === 'setPoint') return json_(setPoint_(who, body));
@@ -281,4 +291,102 @@ function setPoint_(who, body) {
     }
   }
   return { ok: false, error: 'unknown_place' };
+}
+
+// ---------- reminders ----------
+
+/** Run once from the editor: (re)creates the two daily reminder triggers. */
+function setupReminders() {
+  ScriptApp.getProjectTriggers().forEach(function (t) {
+    if (t.getHandlerFunction() === 'reminders') ScriptApp.deleteTrigger(t);
+  });
+  [MORNING_HOUR, EVENING_HOUR].forEach(function (h) {
+    ScriptApp.newTrigger('reminders').timeBased().everyDays(1).atHour(h).nearMinute(0).inTimezone(TZ).create();
+  });
+}
+
+/** Trigger handler. */
+function reminders() {
+  return reminders_(new Date());
+}
+
+/** A worker's place as a locationId: accepts the id or the place's name, any case. '' if none/unknown. */
+function placeId_(v) {
+  var want = String(v || '').trim().toLowerCase();
+  if (!want) return '';
+  var hit = rows_('locations').filter(function (r) {
+    return String(r.locationId).toLowerCase() === want || String(r.name).trim().toLowerCase() === want;
+  })[0];
+  return hit ? String(hit.locationId) : '';
+}
+
+function isLastDayOfMonth_(ymd) {
+  var p = ymd.split('-').map(Number);
+  return new Date(Date.UTC(p[0], p[1] - 1, p[2] + 1)).getUTCDate() === 1;
+}
+
+/** Works out what is outstanding at `now` and emails the people concerned. Returns what it sent (for tests/logs). */
+function reminders_(now) {
+  var today = Utilities.formatDate(now, TZ, 'yyyy-MM-dd');
+  var hour = Number(Utilities.formatDate(now, TZ, 'H'));
+  var evening = hour >= EVENING_HOUR - 1;
+  var lastDay = isLastDayOfMonth_(today);
+  var month = today.slice(0, 7);
+  var monthName = Utilities.formatDate(now, TZ, 'MMMM');
+  var dayName = Utilities.formatDate(now, TZ, 'd MMM');
+
+  var moves = rows_('movements').filter(function (r) { return r.movementId; });
+  if (!moves.length) return [];  // not in use yet
+  var locs = rows_('locations').filter(function (r) { return r.locationId; });
+  var workers = rows_('workers').filter(function (w) { return yes_(w.active); }).map(function (w) {
+    return { name: String(w.name).trim(), email: String(w.email || '').trim(), role: String(w.role || '').trim().toLowerCase(),
+             place: placeId_(w.place) };
+  });
+
+  var issues = [];
+  locs.forEach(function (l) {
+    var id = String(l.locationId);
+    if (evening && String(l.role) === 'shop') {
+      var sold = moves.some(function (m) { return m.type === 'sale' && String(m.from) === id && date_(m.date) === today; });
+      if (!sold) issues.push({ place: l, kind: 'sales' });
+    }
+    if (lastDay) {
+      var counted = moves.some(function (m) { return m.type === 'count' && String(m.to) === id && date_(m.date).slice(0, 7) === month; });
+      if (!counted) issues.push({ place: l, kind: 'count' });
+    }
+  });
+  if (!issues.length) return [];
+
+  var sent = [];
+  var summary = [];
+  issues.forEach(function (x) {
+    var people = workers.filter(function (w) { return w.place === String(x.place.locationId) && w.email; });
+    var subject, body;
+    people.forEach(function (w) {
+      var first = w.name.split(' ')[0];
+      if (x.kind === 'sales') {
+        subject = 'Beelove: record today\'s sales at ' + x.place.name;
+        body = 'Hello ' + first + ',\n\nNo sales have been recorded for ' + x.place.name + ' today (' + dayName + ').\n' +
+          'If anything was sold, please record it in the app before you close:\n' + APP_URL + '\n\n' +
+          'If the shop sold nothing today, you can ignore this message.\n\nBeelove Farm';
+      } else {
+        subject = 'Beelove: ' + monthName + ' stock count at ' + x.place.name;
+        body = 'Hello ' + first + ',\n\nToday is the last day of ' + monthName + ' and the stock count for ' + x.place.name +
+          ' has not been done yet.\nPlease count everything that is there and enter it in the app (Monthly count):\n' + APP_URL +
+          '\n\nBeelove Farm';
+      }
+      MailApp.sendEmail(w.email, subject, body);
+      sent.push({ to: w.email, kind: x.kind, place: String(x.place.locationId) });
+    });
+    summary.push('• ' + x.place.name + ': ' + (x.kind === 'sales' ? 'no sales recorded today' : monthName + ' count not done') +
+      (people.length ? ' (reminded ' + people.map(function (w) { return w.name; }).join(', ') + ')'
+        : ' (nobody reminded: no worker with an email has this place)'));
+  });
+
+  workers.filter(function (w) { return w.role === 'manager' && w.email; }).forEach(function (m) {
+    MailApp.sendEmail(m.email, 'Beelove Stock: ' + issues.length + ' thing' + (issues.length === 1 ? '' : 's') + ' outstanding (' + dayName + ')',
+      'Hello ' + m.name.split(' ')[0] + ',\n\n' + summary.join('\n') + '\n\nDashboard: ' + APP_URL + '\n\nBeelove Stock');
+    sent.push({ to: m.email, kind: 'summary' });
+  });
+  return sent;
 }

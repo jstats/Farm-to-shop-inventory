@@ -228,7 +228,19 @@
     return m.type === 'sale' || m.type === 'transfer' ? m.from : m.to;
   }
 
-  return { TYPES: TYPES, replay: replay, summarise: summarise, onHand: onHand, monthsBack: monthsBack, sortMovements: sortMovements,
+  // ---------- reminders ----------
+  /** True if any sale was recorded at `locationId` on `date`. */
+  function soldOn(movements, locationId, date) {
+    return movements.some(function (m) { return m.type === 'sale' && m.from === locationId && m.date === date; });
+  }
+
+  /** Days after `date` until the month ends: 0 on the last day. */
+  function daysLeftInMonth(date) {
+    var p = date.split('-').map(Number);
+    return new Date(Date.UTC(p[0], p[1], 0)).getUTCDate() - p[2];
+  }
+
+  return { TYPES: TYPES, replay: replay, soldOn: soldOn, daysLeftInMonth: daysLeftInMonth, summarise: summarise, onHand: onHand, monthsBack: monthsBack, sortMovements: sortMovements,
            distanceM: distanceM, hasPoint: hasPoint, placeCheck: placeCheck, checkPlace: checkPlace,
            DEFAULT_RADIUS_M: DEFAULT_RADIUS_M, MAX_ACCURACY_M: MAX_ACCURACY_M };
 });

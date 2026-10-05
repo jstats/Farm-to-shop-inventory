@@ -24,6 +24,11 @@ be saved within 200 m of it: sales and counts at that shop, transfers where the 
 arrives. GPS works without data, so this works offline too. Every entry stores where the phone was and how far
 it was from the place (`lat`, `lon`, `accuracyM`, `distanceM` in `movements`).
 
+**Reminders.** Every day at 6pm, each shop with no sales recorded that day emails its workers. On the last day
+of the month (9am and 6pm), each place not yet counted emails its workers. Managers get one email listing who was
+reminded. With Gmail on their phone, workers get a notification even if they never open the app. Inside the app,
+the same reminders show as yellow banners (sales from 4pm; the count in the last 3 days of the month).
+
 Each worker signs in with **their name and a PIN**. The sheet records the signed-in name on every
 entry, so you can tell who did what. The worker's name comes from the sheet, never from the phone.
 
@@ -52,6 +57,7 @@ Workers see the change the next time their app refreshes.
    This creates the `items`, `locations`, `workers` and `movements` tabs and fills in the items and the three places.
 4. Open the `workers` tab. Add each worker with a PIN (4 or more digits), for example `Kalondu | 4821 | yes`.
    Put `manager` in the `role` column for anyone allowed to set place locations.
+   For reminders, fill in `email` and `place` (the shop or farm they work at, e.g. `Kiunduani Shop`).
 5. Go to **Deploy → New deployment → Web app**. Set Execute as: **Me** and Who has access: **Anyone**. Then press Deploy.
    Copy the web app URL, which ends in `/exec`.
 
@@ -61,12 +67,16 @@ Workers see the change the next time their app refreshes.
    The app will be at `https://jstats.github.io/Farm-to-shop-inventory/`.
 3. Send workers the link. On their phone they open it in Chrome, then tap ⋮ → **Add to Home screen**.
 
-### 3. Set each place's location
+### 3. Turn on reminders
+In Apps Script, pick `setupReminders` and press **Run** once (approve the email permission).
+To stop them: the ⏰ **Triggers** page in the left menu, delete the two `reminders` triggers.
+
+### 4. Set each place's location
 A manager signs in on their phone, goes to the farm, then each shop. At each place they open **Me → Place
 locations** and tap **I am here** while standing inside. Places that are not set accept entries from anywhere.
 To allow a bigger area (e.g. a large farm), type a distance in metres in `radiusM` in the `locations` tab.
 
-### 4. Day one: the opening count
+### 5. Day one: the opening count
 Before anything else, do a **Monthly count** at the farm, Kiunduani and Nairobi, with every item counted.
 That sets the starting stock. Until then the dashboard shows everything as "Out".
 
