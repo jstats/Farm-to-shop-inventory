@@ -30,7 +30,7 @@ with one button straight to the right form, and a strip shows on every other scr
 - **Count the stock today:** in the last 3 days of the month. If missed, "October count was missed" stays for the
   first 3 days of the next month. Only a count in that window counts as the month-end count.
 
-Workers see reminders for their own `place` (workers tab); managers see every place.
+Workers see reminders for their own places (`place` in the workers tab, several allowed); managers see every place.
 Email is a backup: at 6pm (sales) and on the last day of the month (count), the sheet emails the workers concerned
 and sends managers one summary of who is behind.
 
@@ -62,7 +62,8 @@ Workers see the change the next time their app refreshes.
    This creates the `items`, `locations`, `workers` and `movements` tabs and fills in the items and the three places.
 4. Open the `workers` tab. Add each worker with a PIN (4 or more digits), for example `Kalondu | 4821 | yes`.
    Put `manager` in the `role` column for anyone allowed to set place locations.
-   For reminders, fill in `email` and `place` (the shop or farm they work at, e.g. `Kiunduani Shop`).
+   For reminders, fill in `email` and `place`: where they work, e.g. `Kiunduani Shop`. Someone who works in
+   several places gets them all, separated by commas: `Farm, Kiunduani Shop`.
 5. Go to **Deploy → New deployment → Web app**. Set Execute as: **Me** and Who has access: **Anyone**. Then press Deploy.
    Copy the web app URL, which ends in `/exec`.
 

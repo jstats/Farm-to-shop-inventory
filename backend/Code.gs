@@ -7,8 +7,8 @@
  *                lat/lon = the place's GPS point (a manager sets it from the app); radiusM = how close a phone
  *                must be (default 200). A place with no lat/lon accepts entries from anywhere.
  *   workers    – who may sign in: name + PIN. Set active = no when someone leaves. role = manager may set
- *                places' GPS points from the app and gets the reminder summary. email + place (the shop or farm
- *                they work at) decide who gets which reminder.
+ *                places' GPS points from the app and gets the reminder summary. email + place decide who gets which
+ *                reminder; place is where they work, several separated by commas (e.g. "Farm, Kiunduani Shop").
  *   movements  – one row per captured movement. Never edit "movementId"; fix mistakes with a new count.
  *                lat/lon/accuracyM/distanceM = where the phone was when the entry was saved.
  *
@@ -175,7 +175,7 @@ function signIn_(name, pin) {
     return { error: 'wrong_pin' };
   }
   cache.remove(key);
-  return { name: String(w.name).trim(), role: String(w.role || '').trim().toLowerCase(), place: placeId_(w.place) };
+  return { name: String(w.name).trim(), role: String(w.role || '').trim().toLowerCase(), places: placeIds_(w.place) };
 }
 
 function data_() {
@@ -217,7 +217,7 @@ function doPost(e) {
     out.ok = true;
     out.worker = who.name;
     out.role = who.role;
-    out.place = who.place;
+    out.places = who.places;
     return json_(out);
   }
   if (body.action === 'setPoint') return json_(setPoint_(who, body));
@@ -310,14 +310,19 @@ function reminders() {
   return reminders_(new Date());
 }
 
-/** A worker's place as a locationId: accepts the id or the place's name, any case. '' if none/unknown. */
-function placeId_(v) {
-  var want = String(v || '').trim().toLowerCase();
-  if (!want) return '';
-  var hit = rows_('locations').filter(function (r) {
-    return String(r.locationId).toLowerCase() === want || String(r.name).trim().toLowerCase() === want;
-  })[0];
-  return hit ? String(hit.locationId) : '';
+/** A worker's places as locationIds. Accepts ids or names, any case, separated by commas or semicolons; unknown ones are skipped. */
+function placeIds_(v) {
+  var locs = rows_('locations');
+  var out = [];
+  String(v || '').split(/[,;]/).forEach(function (part) {
+    var want = part.trim().toLowerCase();
+    if (!want) return;
+    var hit = locs.filter(function (r) {
+      return String(r.locationId).toLowerCase() === want || String(r.name).trim().toLowerCase() === want;
+    })[0];
+    if (hit && out.indexOf(String(hit.locationId)) < 0) out.push(String(hit.locationId));
+  });
+  return out;
 }
 
 function isLastDayOfMonth_(ymd) {
@@ -340,7 +345,7 @@ function reminders_(now) {
   var locs = rows_('locations').filter(function (r) { return r.locationId; });
   var workers = rows_('workers').filter(function (w) { return yes_(w.active); }).map(function (w) {
     return { name: String(w.name).trim(), email: String(w.email || '').trim(), role: String(w.role || '').trim().toLowerCase(),
-             place: placeId_(w.place) };
+             places: placeIds_(w.place) };
   });
 
   var issues = [];
@@ -362,7 +367,7 @@ function reminders_(now) {
   var sent = [];
   var summary = [];
   issues.forEach(function (x) {
-    var people = workers.filter(function (w) { return w.place === String(x.place.locationId) && w.email; });
+    var people = workers.filter(function (w) { return w.places.indexOf(String(x.place.locationId)) >= 0 && w.email; });
     var subject, body;
     people.forEach(function (w) {
       var first = w.name.split(' ')[0];

@@ -185,9 +185,9 @@
       if (!res.ok) throw res;
       state.data = { items: res.items, locations: res.locations, movements: res.movements, fetchedAt: new Date().toISOString() };
       save('data', state.data);
-      if (state.profile.role !== res.role || state.profile.place !== res.place) {
+      if (state.profile.role !== res.role || JSON.stringify(state.profile.places) !== JSON.stringify(res.places || [])) {
         state.profile.role = res.role;
-        state.profile.place = res.place;
+        state.profile.places = res.places || [];
         save('profile', state.profile);
       }
       state.authError = false;
@@ -288,7 +288,7 @@
         if (!res.ok) throw res;
         state.profile.name = res.worker; // as spelled in the sheet
         state.profile.role = res.role;
-        state.profile.place = res.place;
+        state.profile.places = res.places || [];
         state.data = { items: res.items, locations: res.locations, movements: res.movements, fetchedAt: new Date().toISOString() };
         save('data', state.data);
         afterSignIn();
@@ -314,7 +314,7 @@
 
   // ---------- home ----------
   /**
-   * What this worker still has to do, newest rules first. Workers with a place in the sheet see their place only;
+   * What this worker still has to do. Workers with places in the sheet see those places only;
    * everyone else (managers) sees every place.
    *  - sales: from 4pm, a shop with nothing recorded today
    *  - count: last 3 days of the month, and (marked late) the first 3 days of the next, until a count is made
@@ -322,8 +322,8 @@
   function reminders() {
     if (!state.profile || !state.data) return [];
     var mvts = movements();
-    var mine = state.profile.place;
-    var places = locations().filter(function (l) { return !mine || l.id === mine; });
+    var mine = myPlaces();
+    var places = locations().filter(function (l) { return !mine.length || mine.indexOf(l.id) >= 0; });
     var out = [];
     var win = Stock.countWindow(today());
     if (win) {
@@ -345,6 +345,10 @@
       });
     }
     return out;
+  }
+
+  function myPlaces() {
+    return (state.profile && state.profile.places) || [];
   }
 
   function reminderCards(list) {
@@ -405,7 +409,8 @@
     var f = farm() || {};
     var shopList = shops();
     var isShop = function (id) { return id && shopList.some(function (s) { return s.id === id; }); };
-    var lastShop = isShop(state.prefs.shop) ? state.prefs.shop : isShop(state.profile.place) ? state.profile.place : (shopList[0] || {}).id;
+    var myShop = myPlaces().filter(isShop)[0];
+    var lastShop = isShop(state.prefs.shop) ? state.prefs.shop : myShop || (shopList[0] || {}).id;
     var where = '';
     if (type === 'restock') {
       where = '<label class="field"><span>Where did the stock arrive?</span><select name="to">' + locOptions(locations(), f.id) + '</select></label>';
@@ -415,7 +420,7 @@
     } else if (type === 'sale') {
       where = '<label class="field"><span>Which shop?</span><select name="from">' + locOptions(shopList, lastShop) + '</select></label>';
     } else {
-      var countAt = locations().some(function (l) { return l.id === state.prefs.shop; }) ? state.prefs.shop : (state.profile.place || lastShop);
+      var countAt = locations().some(function (l) { return l.id === state.prefs.shop; }) ? state.prefs.shop : (myPlaces()[0] || lastShop);
       where = '<label class="field"><span>Where are you counting?</span><select name="to">' + locOptions(locations(), countAt) + '</select></label>';
     }
     var help = {

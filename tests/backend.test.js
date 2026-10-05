@@ -250,9 +250,24 @@ test('last day of the month: places not counted are reminded morning and evening
   assert.equal(env.ctx.reminders_(nairobi('2026-10-30T09:00:00')).length, 0);
 });
 
-test('sign-in returns the worker\'s place by id or by name', () => {
+test('sign-in returns the worker\'s places by id or by name, several allowed', () => {
   const env = withPlaces(load());
-  assert.equal(env.post({ action: 'data', name: 'Kalondu', pin: '2222' }).place, 'kiunduani');
-  assert.equal(env.post({ action: 'data', name: 'Otieno Juma', pin: '3333' }).place, 'nairobi');
-  assert.equal(env.post({ action: 'data', ...mwende }).place, '');
+  const w = env.sheets.workers;
+  w.rows[5] = ['Felix', '5555', 'yes', '', 'felix@example.com', 'Farm, kiunduani; Nowhere'];
+  const places = (name, pin) => JSON.parse(JSON.stringify(env.post({ action: 'data', name, pin }).places));
+  assert.deepEqual(places('Kalondu', '2222'), ['kiunduani']);
+  assert.deepEqual(places('Otieno Juma', '3333'), ['nairobi']);
+  assert.deepEqual(places('Mwende Musyoka', '0427'), []);
+  assert.deepEqual(places('Felix', '5555'), ['farm', 'kiunduani']);  // unknown "Nowhere" is skipped
+});
+
+test('a worker with several places is reminded for each of them', () => {
+  const env = withPlaces(load());
+  env.sheets.workers.rows[5] = ['Felix', '5555', 'yes', '', 'felix@example.com', 'Farm, Kiunduani Shop'];
+  env.post({ action: 'save', ...mwende, movements: [sale('n1', { from: 'nairobi', date: '2026-10-31' })] });
+  const sent = JSON.parse(JSON.stringify(env.ctx.reminders_(nairobi('2026-10-31T18:00:00'))));
+  const felix = sent.filter((x) => x.to === 'felix@example.com').map((x) => x.kind + '@' + x.place).sort();
+  assert.deepEqual(felix, ['count@farm', 'count@kiunduani', 'sales@kiunduani']);
+  const kalondu = sent.filter((x) => x.to === 'kalondu@example.com').map((x) => x.kind + '@' + x.place).sort();
+  assert.deepEqual(kalondu, ['count@kiunduani', 'sales@kiunduani']);
 });
