@@ -172,3 +172,10 @@ test('flowKg: packing is a change of container; what stays on the equipment is l
   assert.deepEqual(t, { start: 0, in: 50, out: 8, sold: 0, lost: 1, countDiff: 0, end: 41 });
   assert.equal(t.start + t.in - t.out - t.sold - t.lost + t.countDiff, t.end);
 });
+
+test('app version and offline cache version match', () => {
+  const fs = require('node:fs');
+  const app = fs.readFileSync(__dirname + '/../docs/app.js', 'utf8').match(/var APP_VERSION = (\d+);/)[1];
+  const sw = fs.readFileSync(__dirname + '/../docs/sw.js', 'utf8').match(/var VERSION = 'beelove-stock-v(\d+)';/)[1];
+  assert.equal(app, sw);
+});

@@ -113,7 +113,9 @@ That sets the starting stock. Until then the dashboard shows everything as "Out"
 - **Someone leaves:** set `active` to `no` in `workers`. Their old entries keep their name.
 - **Forgotten PIN:** change it in `workers`. After 5 wrong PINs, that name is locked for 15 minutes.
 - **Privacy:** the app's code is public on GitHub. The data is not: the sheet only answers to a valid name and PIN.
-- **Updating the app:** after changing any file in `docs/`, bump `VERSION` in `docs/sw.js`, so phones pick up the new version.
+- **Updating the app:** after changing any file in `docs/`, raise `VERSION` in `docs/sw.js` and `APP_VERSION` in
+  `docs/app.js` together (a test checks they match). Phones switch to the new version the next time the app is opened
+  with signal (or after the form being filled is saved); **Me** shows the version number.
   After changing `Code.gs`, paste the new code, run `setup` again (it adds any new columns and keeps your data), then
   **Deploy → Manage deployments → ✏️ Edit → Version: New version → Deploy**, so the URL stays the same.
 

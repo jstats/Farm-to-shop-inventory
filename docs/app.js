@@ -6,6 +6,7 @@
  * anything still waiting in the queue, so a worker always sees their own entries.
  */
 (function () {
+  var APP_VERSION = 11; // keep equal to VERSION in sw.js (a test checks)
   var CFG = window.BEELOVE_CONFIG || {};
   var DEMO = !CFG.apiUrl;
   var KEY = DEMO ? 'beelove-stock-demo:' : 'beelove-stock:';
@@ -178,6 +179,9 @@
 
   function paintBanner() {
     var html = '';
+    if (state.updateReady) {
+      html += '<div class="banner info">A new version of the app is ready. Finish what you are doing, then <button data-act="reload">update now</button>.</div>';
+    }
     var todo = state.profile && state.tab !== 'home' && !state.view ? reminders() : [];
     if (todo.length) {
       html += '<div class="banner remind-strip" role="alert">🔔 ' + esc(todo[0].title) +
@@ -973,7 +977,8 @@
       '<div class="btn-row">' +
       (DEMO ? '<button class="btn secondary" data-act="reset-demo">Reset demo data</button>' : '') +
       '<button class="btn secondary" data-act="signout">Sign out</button></div>' +
-      '<p class="muted small" style="margin-top:16px">Tip: add this app to your home screen. On Android open the browser menu (⋮) and tap “Add to Home screen”. It works with no signal; entries are sent when signal comes back.</p>';
+      '<p class="muted small" style="margin-top:16px">App version ' + APP_VERSION + '.</p>' +
+      '<p class="muted small">Tip: add this app to your home screen. On Android open the browser menu (⋮) and tap “Add to Home screen”. It works with no signal; entries are sent when signal comes back.</p>';
   }
 
   // ---------- events ----------
@@ -1008,6 +1013,8 @@
       state.view = null;
       state.tab = 'home';
       render();
+    } else if (act === 'reload') {
+      location.reload();
     } else if (act === 'sync') {
       sync();
     } else if (act === 'signout' || act === 'resign') {
@@ -1041,7 +1048,17 @@
   setInterval(function () { if (!document.hidden && state.queue.length) sync(); }, 60000);
 
   if ('serviceWorker' in navigator && location.protocol !== 'file:') {
-    navigator.serviceWorker.register('sw.js').catch(function () {});
+    // When a new version has been downloaded, switch to it: straight away, or after the form being filled is saved.
+    var hadController = !!navigator.serviceWorker.controller;
+    navigator.serviceWorker.addEventListener('controllerchange', function () {
+      if (!hadController || state.updateReady) return;
+      state.updateReady = true;
+      if (!state.view || state.view === 'done') location.reload();
+      else paintBanner();
+    });
+    navigator.serviceWorker.register('sw.js').then(function (reg) {
+      document.addEventListener('visibilitychange', function () { if (!document.hidden) reg.update().catch(function () {}); });
+    }).catch(function () {});
   }
 
   render();

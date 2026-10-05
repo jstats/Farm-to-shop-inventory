@@ -1,10 +1,13 @@
 /* Keeps the app working with no signal. Bump VERSION whenever a file below changes. */
-var VERSION = 'beelove-stock-v10';
+var VERSION = 'beelove-stock-v11';  // keep equal to APP_VERSION in app.js (a test checks)
 var FILES = ['./', 'index.html', 'styles.css', 'config.js', 'stock.js', 'seed.js', 'app.js', 'manifest.webmanifest',
              'icons/icon-192.png', 'icons/icon-512.png', 'icons/apple-touch-icon.png'];
 
 self.addEventListener('install', function (e) {
-  e.waitUntil(caches.open(VERSION).then(function (c) { return c.addAll(FILES); }).then(function () { return self.skipWaiting(); }));
+  // cache: 'reload' skips the browser's own cache, so a new version never stores old copies of the files.
+  e.waitUntil(caches.open(VERSION).then(function (c) {
+    return c.addAll(FILES.map(function (f) { return new Request(f, { cache: 'reload' }); }));
+  }).then(function () { return self.skipWaiting(); }));
 });
 
 self.addEventListener('activate', function (e) {
