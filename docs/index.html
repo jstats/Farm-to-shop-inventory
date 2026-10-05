@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>Beelove Stock</title>
+  <meta name="description" content="Beelove Farm stock: restocks, farm-to-shop transfers, sales and monthly counts." />
+  <meta name="theme-color" content="#F58320" />
+  <link rel="manifest" href="manifest.webmanifest" />
+  <link rel="icon" href="icons/icon-192.png" />
+  <link rel="apple-touch-icon" href="icons/apple-touch-icon.png" />
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <header class="top">
+    <img src="icons/icon-192.png" alt="" class="top-logo" />
+    <div class="top-title">Beelove Stock</div>
+    <div id="sync" class="sync" aria-live="polite"></div>
+  </header>
+  <div id="banner"></div>
+  <main id="view"></main>
+  <nav id="tabs" class="tabs" hidden>
+    <button data-tab="home">Record</button>
+    <button data-tab="dashboard">Dashboard</button>
+    <button data-tab="me">Me</button>
+  </nav>
+  <div id="tip" class="tip" role="tooltip" hidden></div>
+  <script src="config.js"></script>
+  <script src="stock.js"></script>
+  <script src="seed.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

@@ -1,0 +1,9 @@
+{
+  "name": "beelove-stock",
+  "private": true,
+  "description": "Beelove Farm farm-to-shop stock tracking: phone web app + Google Sheet backend.",
+  "scripts": {
+    "test": "node --test tests/*.test.js",
+    "start": "http-server docs -p 8080 -c-1"
+  }
+}
