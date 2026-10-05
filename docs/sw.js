@@ -1,5 +1,5 @@
 /* Keeps the app working with no signal. Bump VERSION whenever a file below changes. */
-var VERSION = 'beelove-stock-v1';
+var VERSION = 'beelove-stock-v2';
 var FILES = ['./', 'index.html', 'styles.css', 'config.js', 'stock.js', 'seed.js', 'app.js', 'manifest.webmanifest',
              'icons/icon-192.png', 'icons/icon-512.png', 'icons/apple-touch-icon.png'];
 
