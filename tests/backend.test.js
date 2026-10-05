@@ -84,7 +84,9 @@ test('backend seed items and locations match the app seed', () => {
   const { sheets } = load();
   // JSON round trip: arrays made inside the vm have a different prototype.
   const plain = (x) => JSON.parse(JSON.stringify(x));
-  assert.deepEqual(plain(sheets.items.rows.slice(1).map((r) => r.slice(0, 6))), Seed.ITEMS);
+  const h = sheets.items.rows[0];
+  const cols = ['itemId', 'name', 'category', 'unit', 'price', 'reorderLevel', 'places'].map((c) => h.indexOf(c));
+  assert.deepEqual(plain(sheets.items.rows.slice(1).map((r) => cols.map((i) => r[i]))), Seed.ITEMS);
   assert.deepEqual(plain(sheets.locations.rows.slice(1).map((r) => r.slice(0, 3))), Seed.LOCATIONS);
 });
 
@@ -273,4 +275,70 @@ test('backend replay matches the app\'s stock maths', () => {
   moves.push({ id: 'cX', date: '2026-10-02', type: 'count', itemId: 'honey-1kg', qty: 5, from: '', to: 'nairobi', price: 0, worker: 'x', at: '2026-10-02T09:00:00Z' });
   const a = JSON.parse(JSON.stringify(ctx.replay_(moves).balance));
   assert.deepEqual(a, Stock.replay(moves).balance);
+});
+
+test('setup on an existing sheet adds the new items and fills places, keeping edits', () => {
+  const { ctx, sheets } = load();
+  const it = sheets.items;
+  // Simulate the first version: no places column, only the 16 shop items, one price changed by the owner.
+  it.rows.splice(17);
+  it.rows.forEach((r) => r.splice(7));
+  it.rows[1][4] = 5000;
+  ctx.setup();
+  const h = it.rows[0];
+  assert.equal(h.join(','), 'itemId,name,category,unit,price,reorderLevel,active,places');
+  assert.equal(it.rows.length - 1, Seed.ITEMS.length);
+  assert.equal(it.rows[1][4], 5000);
+  assert.equal(it.rows[1][7], 'Kiunduani Shop, Nairobi Shop');
+  assert.equal(it.rows.find((r) => r[0] === 'dorper-sheep')[7], 'Farm');
+  ctx.setup(); // again: nothing duplicated
+  assert.equal(it.rows.length - 1, Seed.ITEMS.length);
+});
+
+test('items come with their places; restocks keep own/bought, losses keep a reason', () => {
+  const { post, sheets } = load();
+  const data = post({ action: 'data', ...mwende });
+  const sheep = data.items.find((i) => i.id === 'dorper-sheep');
+  assert.deepEqual(JSON.parse(JSON.stringify(sheep.places)), ['farm']);
+  assert.deepEqual(JSON.parse(JSON.stringify(data.items.find((i) => i.id === 'honey-1kg').places)), ['farm', 'kiunduani', 'nairobi']);
+  const r = post({ action: 'save', ...mwende, movements: [
+    sale('b1', { type: 'restock', itemId: 'honey-bulk', from: '', to: 'farm', qty: 30, price: 0, source: 'bought', supplier: 'Mutua', cost: 900 }),
+    sale('o1', { type: 'restock', itemId: 'honey-bulk', from: '', to: 'farm', qty: 10, price: 0, source: 'own', supplier: 'ignored', cost: 5 }),
+    sale('l1', { type: 'loss', itemId: 'rabbit', from: 'farm', qty: 2, price: 0, reason: 'died' }),
+    sale('l2', { type: 'loss', itemId: 'matoke', from: 'farm', qty: 1, price: 0, reason: 'eaten by monkeys' }),
+    sale('f1', { itemId: 'matoke', from: 'farm', qty: 5, price: 700 }),
+  ] });
+  assert.deepEqual(r.saved, ['b1', 'o1', 'l1', 'l2', 'f1']);
+  const h = sheets.movements.rows[0];
+  const row = (n) => Object.fromEntries(h.map((k, i) => [k, sheets.movements.rows[n][i]]));
+  assert.equal(row(1).source, 'bought'); assert.equal(row(1).supplier, 'Mutua'); assert.equal(row(1).cost, 900);
+  assert.equal(row(2).source, 'own'); assert.equal(row(2).supplier, ''); assert.equal(row(2).cost, '');
+  assert.equal(row(3).reason, 'died');
+  assert.equal(row(4).reason, 'other');
+  const back = post({ action: 'data', ...mwende }).movements;
+  assert.equal(back.find((m) => m.id === 'b1').cost, 900);
+  assert.equal(back.find((m) => m.id === 'l1').reason, 'died');
+});
+
+test('report: own vs bought, losses, and market sales from the farm', () => {
+  const env = withPlaces(load());
+  env.post({ action: 'save', ...mwende, movements: [
+    sale('b1', { date: '2026-09-29', type: 'restock', itemId: 'honey-bulk', from: '', to: 'farm', qty: 30, price: 0, source: 'bought', supplier: 'Mutua', cost: 900 }),
+    sale('b2', { date: '2026-09-30', type: 'restock', itemId: 'honey-bulk', from: '', to: 'farm', qty: 10, price: 0, source: 'bought', supplier: 'Wambua', cost: 1000 }),
+    sale('o1', { date: '2026-09-30', type: 'restock', itemId: 'honey-bulk', from: '', to: 'farm', qty: 25, price: 0, source: 'own' }),
+    sale('l1', { date: '2026-10-01', type: 'loss', itemId: 'rabbit', from: 'farm', qty: 2, price: 0, reason: 'died' }),
+    sale('f1', { date: '2026-10-02', itemId: 'matoke', from: 'farm', qty: 5, price: 700 }),
+  ] });
+  const r = env.ctx.report_('week', { start: '2026-09-28', end: '2026-10-04' }, '2026-10-05');
+  assert.deepEqual(JSON.parse(JSON.stringify(r.incoming)), [
+    { name: 'Bulk Honey (per kg)', unit: 'kg', own: 25, bought: 40, spent: 37000, suppliers: 'Mutua, Wambua' },
+  ]);
+  assert.deepEqual(JSON.parse(JSON.stringify(r.losses)), [{ name: 'Rabbit', unit: 'head', reason: 'died', qty: 2, value: 0 }]);
+  assert.deepEqual(r.byShop.map((b) => b.name), ['Farm (market)', 'Kiunduani Shop', 'Nairobi Shop']);
+  assert.equal(r.byShop[0].amount, 3500);
+  const mail = env.ctx.reportEmail_(r);
+  assert.match(mail.html, /Paid for bought stock: KSh 37,000/);
+  assert.match(mail.html, /Losses recorded/);
+  // Farm items never show as low in a shop.
+  assert.equal(r.low.some((l) => /Matoke|Rabbit/.test(l.name)), false);
 });

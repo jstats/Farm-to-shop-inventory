@@ -11,9 +11,10 @@
   var KEY = DEMO ? 'beelove-stock-demo:' : 'beelove-stock:';
 
   var TYPES = {
-    restock: { title: 'Restock / harvest', ico: '📦', hint: 'New stock arriving at the farm or a shop', verb: 'Restocked' },
+    restock: { title: 'Restock / harvest', ico: '📦', hint: 'Harvested, made, born or bought', verb: 'Restocked' },
     transfer: { title: 'Send stock', ico: '🚚', hint: 'Move stock from the farm to a shop', verb: 'Sent' },
-    sale: { title: 'Record sales', ico: '🧾', hint: 'What a shop sold', verb: 'Sold' },
+    sale: { title: 'Record sales', ico: '🧾', hint: 'What a shop or the market sold', verb: 'Sold' },
+    loss: { title: 'Record loss', ico: '⚠️', hint: 'Spoilt, died, broken or stolen', verb: 'Lost' },
     count: { title: 'Monthly count', ico: '📋', hint: 'Count what is on the shelf', verb: 'Counted' },
   };
 
@@ -350,13 +351,25 @@
     var name = it ? it.name : m.itemId;
     var unit = it ? it.unit : '';
     var where = m.type === 'transfer' ? locName(m.from) + ' → ' + locName(m.to)
-      : m.type === 'sale' ? locName(m.from) : locName(m.to);
+      : m.type === 'sale' || m.type === 'loss' ? locName(m.from) : locName(m.to);
     var pending = state.queue.some(function (q) { return q.id === m.id; });
-    var extra = m.type === 'sale' ? ' · ' + ksh(m.qty * m.price) : '';
+    var extra = m.type === 'sale' ? ' · ' + ksh(m.qty * m.price)
+      : m.type === 'restock' && m.source === 'bought' ? ' · bought from ' + m.supplier + (m.cost ? ' · ' + ksh(m.qty * m.cost) : '')
+      : m.type === 'loss' ? ' · ' + reasonName(m.reason) : '';
     return '<li><span class="muted small" style="width:48px">' + esc(niceDate(m.date)) + '</span>' +
       '<span class="grow"><b>' + esc(TYPES[m.type] ? TYPES[m.type].verb : m.type) + ' ' + qty(m.qty) + ' ' + esc(unit) + '</b> ' + esc(name) +
       '<br><span class="muted small">' + esc(where) + extra + ' · ' + esc(m.worker) + (m.note ? ' · “' + esc(m.note) + '”' : '') + '</span></span>' +
       (pending ? '<span class="pill wait">waiting</span>' : '') + '</li>';
+  }
+
+  function reasonName(r) {
+    var x = LOSS_REASONS.filter(function (l) { return l[0] === r; })[0];
+    return x ? x[1].toLowerCase() : 'other';
+  }
+
+  function placeLabel(id) {
+    var l = locations().filter(function (x) { return x.id === id; })[0];
+    return l && l.role === 'farm' ? l.name + ' (market)' : locName(id);
   }
 
   // ---------- forms ----------
@@ -366,40 +379,58 @@
     }).join('');
   }
 
+  var LOSS_REASONS = [['spoilt', 'Spoilt / rotten'], ['died', 'Died'], ['broken', 'Broken / damaged'], ['stolen', 'Stolen / missing'], ['other', 'Other']];
+
   function renderForm(v, type) {
     var T = TYPES[type];
     var f = farm() || {};
     var shopList = shops();
+    // Places that sell: the shops, and the farm (its produce goes straight to the market).
+    var sellers = locations().filter(function (l) { return l.role === 'shop' || l.role === 'farm'; });
     var isShop = function (id) { return id && shopList.some(function (s) { return s.id === id; }); };
+    var isPlace = function (id) { return id && locations().some(function (l) { return l.id === id; }); };
     var myShop = myPlaces().filter(isShop)[0];
     var lastShop = isShop(state.prefs.shop) ? state.prefs.shop : myShop || (shopList[0] || {}).id;
+    var lastPlace = isPlace(state.prefs.shop) ? state.prefs.shop : (myPlaces()[0] || lastShop);
     var where = '';
     if (type === 'restock') {
-      where = '<label class="field"><span>Where did the stock arrive?</span><select name="to">' + locOptions(locations(), f.id) + '</select></label>';
+      where = '<label class="field"><span>Where did the stock arrive?</span><select name="to">' + locOptions(locations(), lastPlace) + '</select></label>' +
+        '<div class="field"><span>Where did it come from?</span><div class="seg">' +
+        '<label><input type="radio" name="source" value="own" checked> 🏡 Our own<small>harvest, workshop, born</small></label>' +
+        '<label><input type="radio" name="source" value="bought"> 🛒 Bought<small>from a farmer or supplier</small></label></div></div>' +
+        '<label class="field" id="supplier-field" hidden><span>Bought from (name)</span><input type="text" name="supplier" maxlength="100" placeholder="e.g. Mutua, Kibwezi"></label>';
     } else if (type === 'transfer') {
       where = '<div class="row2"><label class="field"><span>From</span><select name="from">' + locOptions(locations(), f.id) + '</select></label>' +
         '<label class="field"><span>To</span><select name="to">' + locOptions(locations(), lastShop) + '</select></label></div>';
     } else if (type === 'sale') {
-      where = '<label class="field"><span>Which shop?</span><select name="from">' + locOptions(shopList, lastShop) + '</select></label>';
+      var sellAt = sellers.some(function (l) { return l.id === state.prefs.shop; }) ? state.prefs.shop : lastShop;
+      where = '<label class="field"><span>Where was it sold?</span><select name="from">' + sellers.map(function (l) {
+        return '<option value="' + esc(l.id) + '"' + (l.id === sellAt ? ' selected' : '') + '>' + esc(l.role === 'farm' ? l.name + ' (market)' : l.name) + '</option>';
+      }).join('') + '</select></label>';
+    } else if (type === 'loss') {
+      where = '<label class="field"><span>Where?</span><select name="from">' + locOptions(locations(), lastPlace) + '</select></label>' +
+        '<label class="field"><span>What happened?</span><select name="reason"><option value="">Choose…</option>' +
+        LOSS_REASONS.map(function (r) { return '<option value="' + r[0] + '">' + r[1] + '</option>'; }).join('') + '</select></label>';
     } else {
-      var countAt = locations().some(function (l) { return l.id === state.prefs.shop; }) ? state.prefs.shop : (myPlaces()[0] || lastShop);
-      where = '<label class="field"><span>Where are you counting?</span><select name="to">' + locOptions(locations(), countAt) + '</select></label>';
+      where = '<label class="field"><span>Where are you counting?</span><select name="to">' + locOptions(locations(), lastPlace) + '</select></label>';
     }
     var help = {
       restock: 'Enter how many arrived. Leave the rest empty.',
       transfer: 'Enter how many you are sending. Leave the rest empty.',
-      sale: 'Enter how many were sold. Change the price if you sold at a different price.',
+      sale: 'Enter how many were sold and the price for one.',
+      loss: 'Enter how many were lost. Write what happened in the note.',
       count: 'Count what is physically there and type it in. Type 0 if there are none. Leave empty only items you did not count.',
     }[type];
 
     var cats = [];
     items().forEach(function (it) { if (cats.indexOf(it.category) < 0) cats.push(it.category); });
     var list = cats.map(function (c) {
-      return '<div class="cat">' + esc(c) + '</div>' + items().filter(function (it) { return it.category === c; }).map(function (it) {
-        return '<div class="item' + (type === 'sale' ? ' sale' : '') + '" data-item="' + esc(it.id) + '">' +
-          '<div><div class="name">' + esc(it.name) + '</div><div class="meta">' + esc(it.unit) + ' · ' + ksh(it.price) +
+      return '<div class="cat" data-cat="' + esc(c) + '">' + esc(c) + '</div>' + items().filter(function (it) { return it.category === c; }).map(function (it) {
+        return '<div class="item sale-able" data-item="' + esc(it.id) + '" data-cat="' + esc(c) + '">' +
+          '<div><div class="name">' + esc(it.name) + '</div><div class="meta">' + esc(it.unit) + (it.price ? ' · ' + ksh(it.price) : '') +
           '<span class="onhand"></span></div></div>' +
-          (type === 'sale' ? '<div><label for="p-' + esc(it.id) + '">Price</label><input id="p-' + esc(it.id) + '" inputmode="decimal" name="price" value="' + esc(it.price) + '"></div>' : '') +
+          '<div class="price-box" hidden><label for="p-' + esc(it.id) + '"></label><input id="p-' + esc(it.id) + '" inputmode="decimal" name="price" value="' +
+          (it.price ? esc(it.price) : '') + '" placeholder="KSh" data-default="' + (it.price ? esc(it.price) : '') + '"></div>' +
           '<div><label for="q-' + esc(it.id) + '">' + (type === 'count' ? 'On shelf' : 'How many') + '</label>' +
           '<input id="q-' + esc(it.id) + '" inputmode="decimal" name="qty" placeholder="–" autocomplete="off"></div>' +
           '<div class="warn" hidden></div></div>';
@@ -417,31 +448,53 @@
       '</div>' +
       '<input type="search" id="filter" placeholder="Find an item…" aria-label="Find an item">' +
       list +
-      '<label class="field" style="margin-top:16px"><span>Note (optional)</span><textarea name="note" maxlength="500" placeholder="' +
-      (type === 'count' ? 'e.g. 2 jars broken' : type === 'restock' ? 'e.g. harvest from apiary 3' : '') + '"></textarea></label>' +
+      '<p class="muted" id="none-here" hidden>No items are kept at this place. Ask the manager to add it under "places" in the items tab.</p>' +
+      '<label class="field" style="margin-top:16px"><span>Note' + (type === 'loss' ? '' : ' (optional)') + '</span><textarea name="note" maxlength="500" placeholder="' +
+      ({ count: 'e.g. 2 jars broken', restock: 'e.g. harvest from apiary 3', loss: 'e.g. rats got into the store' }[type] || '') + '"></textarea></label>' +
       '<div class="err" id="form-err"></div>' +
       '<div class="form-pad"></div>' +
       '<div class="savebar"><button class="btn" type="submit" id="save-btn">Save</button></div>' +
       '</form>';
 
     var form = $('#mv');
+    function bought() { return type === 'restock' && form.source && form.source.value === 'bought'; }
     function sourceLoc() {
-      if (type === 'sale' || type === 'transfer') return form.from.value;
-      return null;
+      return type === 'sale' || type === 'transfer' || type === 'loss' ? form.from.value : null;
+    }
+    /** Is the item listed here? It must be kept at the chosen place (for a transfer: at both ends). */
+    function allowed(it) {
+      if (type === 'transfer') return Stock.kept(it, form.from.value) && Stock.kept(it, form.to.value);
+      return Stock.kept(it, type === 'sale' || type === 'loss' ? form.from.value : form.to.value);
     }
     function refresh() {
       var src = sourceLoc();
       var mvts = movements();
       var n = 0;
+      var shown = 0;
+      var term = ($('#filter').value || '').trim().toLowerCase();
+      var priced = type === 'sale' || bought();
+      if (type === 'restock') $('#supplier-field').hidden = !bought();
       Array.prototype.forEach.call(form.querySelectorAll('.item'), function (row) {
         var id = row.getAttribute('data-item');
+        var it = itemById(id);
+        var here = allowed(it);
+        row.setAttribute('data-here', here ? '1' : '0');
+        row.hidden = !here || (term && row.querySelector('.name').textContent.toLowerCase().indexOf(term) < 0);
+        if (!row.hidden) shown++;
+        var pb = row.querySelector('.price-box');
+        pb.hidden = !priced;
+        row.classList.toggle('sale', priced);
+        pb.querySelector('label').textContent = type === 'sale' ? 'Price each' : 'Paid each';
+        var pIn = pb.querySelector('input');
+        if (bought() && pIn.getAttribute('data-mode') !== 'cost') { pIn.value = ''; pIn.setAttribute('data-mode', 'cost'); }
+        if (type === 'restock' && !bought() && pIn.getAttribute('data-mode') === 'cost') pIn.setAttribute('data-mode', '');
         var q = row.querySelector('input[name=qty]').value.trim();
-        var has = q !== '' && (type === 'count' || Number(q) > 0);
+        var has = here && q !== '' && (type === 'count' || Number(q) > 0);
         row.classList.toggle('filled', has);
         if (has) n++;
         var oh = row.querySelector('.onhand');
         var warn = row.querySelector('.warn');
-        if (src) {
+        if (src && here) {
           var on = Stock.onHand(mvts, id, src);
           oh.textContent = ' · ' + qty(on) + ' at ' + locName(src);
           var over = has && Number(q) > on;
@@ -452,18 +505,14 @@
           warn.hidden = true;
         }
       });
+      Array.prototype.forEach.call(form.querySelectorAll('.cat'), function (h) {
+        var c = h.getAttribute('data-cat');
+        h.hidden = !Array.prototype.some.call(form.querySelectorAll('.item'), function (r) { return r.getAttribute('data-cat') === c && !r.hidden; });
+      });
+      $('#none-here').hidden = shown > 0 || !!term;
       $('#save-btn').textContent = n ? 'Save ' + n + ' item' + (n === 1 ? '' : 's') : 'Save';
     }
-    form.addEventListener('input', function (e) {
-      if (e.target.id === 'filter') {
-        var term = e.target.value.trim().toLowerCase();
-        Array.prototype.forEach.call(form.querySelectorAll('.item'), function (row) {
-          row.hidden = term && row.querySelector('.name').textContent.toLowerCase().indexOf(term) < 0;
-        });
-        return;
-      }
-      refresh();
-    });
+    form.addEventListener('input', refresh);
     form.addEventListener('change', refresh);
     refresh();
 
@@ -475,32 +524,54 @@
       var from = form.from ? form.from.value : '';
       var to = form.to ? form.to.value : '';
       if (type === 'transfer' && from === to) { err.textContent = '“From” and “To” must be different places.'; return; }
+      var reason = form.reason ? form.reason.value : '';
+      if (type === 'loss' && !reason) { err.textContent = 'Choose what happened (spoilt, died, broken…).'; form.reason.focus(); return; }
+      var isBought = bought();
+      var supplier = isBought ? form.supplier.value.trim() : '';
+      if (isBought && !supplier) { err.textContent = 'Type who it was bought from.'; form.supplier.focus(); return; }
       var note = form.note.value.trim();
       var at = new Date().toISOString();
       var out = [];
-      var bad = null;
+      var bad = null, noPrice = null;
       Array.prototype.forEach.call(form.querySelectorAll('.item'), function (row) {
+        if (row.getAttribute('data-here') !== '1') return; // typed in before the place was changed: not for this place
         var raw = row.querySelector('input[name=qty]').value.trim().replace(',', '.');
         if (raw === '') return;
         var q = Number(raw);
         if (!isFinite(q) || q < 0) { bad = bad || row; return; }
         if (q === 0 && type !== 'count') return;
         var id = row.getAttribute('data-item');
-        var price = 0;
-        if (type === 'sale') {
-          price = Number(row.querySelector('input[name=price]').value.trim().replace(/,/g, ''));
-          if (!isFinite(price) || price < 0) { bad = bad || row; return; }
+        var price = 0, cost = 0;
+        if (type === 'sale' || isBought) {
+          var pr = row.querySelector('input[name=price]').value.trim().replace(/,/g, '');
+          var pv = Number(pr);
+          if (pr === '' || pv === 0) { noPrice = noPrice || row; return; }
+          if (!isFinite(pv) || pv < 0) { bad = bad || row; return; }
+          if (type === 'sale') price = pv; else cost = pv;
         }
-        out.push({ id: uid(), date: date, type: type, itemId: id, qty: q, from: type === 'sale' || type === 'transfer' ? from : '',
-                   to: type === 'sale' ? '' : to, price: price, worker: state.profile.name, note: note, at: at });
+        var m = { id: uid(), date: date, type: type, itemId: id, qty: q,
+                  from: type === 'sale' || type === 'transfer' || type === 'loss' ? from : '',
+                  to: type === 'sale' || type === 'loss' ? '' : to, price: price, worker: state.profile.name, note: note, at: at };
+        if (type === 'restock') {
+          m.source = isBought ? 'bought' : 'own';
+          if (isBought) { m.supplier = supplier; m.cost = cost; }
+        }
+        if (type === 'loss') m.reason = reason;
+        out.push(m);
       });
       if (bad) {
         err.textContent = 'One of the numbers is not right. Use digits only.';
         bad.scrollIntoView({ block: 'center' });
         return;
       }
+      if (noPrice) {
+        err.textContent = type === 'sale' ? 'Type the price you sold at, for one.' : 'Type the price you paid, for one.';
+        noPrice.scrollIntoView({ block: 'center' });
+        noPrice.querySelector('input[name=price]').focus();
+        return;
+      }
       if (!out.length) { err.textContent = 'Type a number next to at least one item.'; return; }
-      var overs = form.querySelectorAll('.warn:not([hidden])').length;
+      var overs = form.querySelectorAll('.item[data-here="1"] .warn:not([hidden])').length;
       if (overs && !window.confirm(overs + ' item' + (overs === 1 ? ' is' : 's are') + ' more than the stock recorded. Save anyway?')) return;
 
       commit(out);
@@ -509,8 +580,7 @@
     function commit(out) {
       var from = form.from ? form.from.value : '';
       var to = form.to ? form.to.value : '';
-      if (type === 'sale' || type === 'count') state.prefs.shop = type === 'sale' ? from : to;
-      if (type === 'transfer') state.prefs.shop = to;
+      state.prefs.shop = type === 'sale' || type === 'loss' ? from : to;
       save('prefs', state.prefs);
       state.queue = state.queue.concat(out);
       save('queue', state.queue);
@@ -558,9 +628,9 @@
           '<div class="bar" style="height:' + h.toFixed(1) + '%"></div><span class="lbl">' + esc(monthName(m.month).slice(0, 3)) + '</span></div>';
       }).join('') + '</div><p class="muted small" style="margin-top:10px">Tap a bar for the amount. This month is darker.</p></div>';
 
-    var byShop = s.salesByShop.length ? '<h2>This month by shop</h2><div class="table-wrap"><table><thead><tr><th>Shop</th><th class="num">Units</th><th class="num">Sales</th></tr></thead><tbody>' +
+    var byShop = s.salesByShop.length ? '<h2>This month by place</h2><div class="table-wrap"><table><thead><tr><th>Where</th><th class="num">Units</th><th class="num">Sales</th></tr></thead><tbody>' +
       s.salesByShop.map(function (b) {
-        return '<tr><td>' + esc(locName(b.location)) + '</td><td class="num">' + qty(b.units) + '</td><td class="num">' + ksh(b.amount) + '</td></tr>';
+        return '<tr><td>' + esc(placeLabel(b.location)) + '</td><td class="num">' + qty(b.units) + '</td><td class="num">' + ksh(b.amount) + '</td></tr>';
       }).join('') + '</tbody></table></div>' : '';
 
     var lowLi = function (l) {
@@ -603,6 +673,14 @@
           '</td><td class="num">' + qty(a.after) + '</td><td class="num' + (a.delta < 0 ? ' neg' : '') + '">' + (a.delta > 0 ? '+' : '') + qty(a.delta) + '</td></tr>';
       }).join('') + '</tbody></table></div>' : '';
 
+    var inHtml = s.month.own || s.month.bought ? '<h2>New stock in ' + esc(monthName(ym)) + '</h2><div class="tiles">' +
+      tile('Our own', qty(s.month.own) + ' units', 'Harvested, made or born') +
+      tile('Bought', qty(s.month.bought) + ' units', 'Paid ' + ksh(s.month.spent)) + '</div>' : '';
+    var lossHtml = s.losses.length ? '<h2>Losses in ' + esc(monthName(ym)) + '</h2><ul class="list">' + s.losses.map(function (l) {
+      var it = itemById(l.itemId);
+      return '<li><span class="grow">' + esc(it ? it.name : l.itemId) + '<br><span class="muted small">' + esc(reasonName(l.reason)) + '</span></span>' +
+        '<span class="num">' + qty(l.qty) + ' ' + esc(it ? it.unit : '') + '</span>' + (l.value ? '<span class="num muted small" style="min-width:84px">' + ksh(l.value) + '</span>' : '') + '</li>';
+    }).join('') + '</ul>' : '';
     var table = '<h2>Stock now</h2><div class="table-wrap"><table><thead><tr><th>Item</th>' +
       locs.map(function (l) { return '<th class="num">' + esc(l.name.replace(/ Shop$/, '')) + '</th>'; }).join('') +
       '<th class="num">Total</th></tr></thead><tbody>' +
@@ -610,6 +688,7 @@
         return '<tr><td>' + esc(x.item.name) + '<br><span class="muted small">' + esc(x.item.unit) + '</span></td>' +
           locs.map(function (l) {
             var q = x.per[l.id];
+            if (!Stock.kept(x.item, l.id) && !q) return '<td class="num muted">–</td>';
             var cls = q < 0 ? ' neg' : x.lowAt.indexOf(l.id) >= 0 ? ' low' : '';
             return '<td class="num' + cls + '">' + qty(q) + (q < 0 ? ' ⛔' : x.lowAt.indexOf(l.id) >= 0 ? ' ⚠' : '') + '</td>';
           }).join('') + '<td class="num">' + qty(x.total) + '</td></tr>';
@@ -627,7 +706,7 @@
     var fresh = state.data && state.data.fetchedAt ? new Date(state.data.fetchedAt).toLocaleString('en-KE', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }) : '';
     v.innerHTML = '<h1>Dashboard</h1><p class="muted small">' + (DEMO ? 'Demo data' : 'Updated ' + esc(fresh)) +
       ' · <button class="btn link" data-act="sync">Refresh</button></p>' +
-      tiles + low + chart + byShop + counts + adjHtml + table + top + recent;
+      tiles + low + chart + byShop + inHtml + lossHtml + counts + adjHtml + table + top + recent;
     wireChart();
   }
 

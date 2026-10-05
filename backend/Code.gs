@@ -3,10 +3,14 @@
  *
  * The sheet is the record. Workers' phones send stock movements here; the app's dashboard reads them back.
  *   items      – what we sell. Edit names, prices and reorder levels here; set active = no to hide an item.
+ *                places = where the item is kept (e.g. "Farm" or "Kiunduani Shop, Nairobi Shop"); empty = everywhere.
+ *                Forms only list the items kept at the chosen place.
  *   locations  – the farm and the shops (Kiunduani, Nairobi). Add a row with role = shop for a new branch.
  *   workers    – who may sign in: name + PIN. Set active = no when someone leaves. email + place decide who gets
  *                which reminder; place is where they work, several separated by commas (e.g. "Farm, Kiunduani Shop").
  *   movements  – one row per captured movement. Never edit "movementId"; fix mistakes with a new count.
+ *                Restocks say source = own (harvest, workshop, born) or bought (supplier + cost per unit);
+ *                losses say reason = spoilt / died / broken / stolen / other.
  *
  * Every request carries the worker's name and PIN. The worker recorded on a movement is the signed-in
  * worker, never a name the phone sends. After MAX_FAILS wrong PINs a name is locked for LOCK_MINUTES.
@@ -29,40 +33,57 @@ var REPORT_HOUR = 7;    // weekly report on Mondays, monthly report on the REPOR
 var REPORT_MONTH_DAY = 4;  // the month-end count may be done up to the 3rd, so the monthly report waits for it
 
 var TABS = {
-  items:     ['itemId', 'name', 'category', 'unit', 'price', 'reorderLevel', 'active'],
+  items:     ['itemId', 'name', 'category', 'unit', 'price', 'reorderLevel', 'active', 'places'],
   locations: ['locationId', 'name', 'role'],
   workers:   ['name', 'pin', 'active', 'email', 'place'],
   movements: ['movementId', 'date', 'type', 'itemId', 'itemName', 'qty', 'unit', 'from', 'to', 'price', 'amount',
-              'worker', 'note', 'at', 'receivedAt'],
+              'worker', 'note', 'at', 'receivedAt', 'source', 'supplier', 'cost', 'reason'],
 };
 
-// From the Beelove website shop page. reorderLevel = warn when a shop has this many or fewer.
+// From the Beelove website shop page, plus farm produce, livestock and fish (prices to be set in the sheet).
+// reorderLevel = warn when a shop has this many or fewer. Last column = places (where it is kept).
+// Same rows as docs/seed.js (a test keeps them equal).
+var SHOPS = 'Kiunduani Shop, Nairobi Shop';
+var ALL = 'Farm, Kiunduani Shop, Nairobi Shop';
 var SEED_ITEMS = [
-  ['ktbh-hive', 'KTBH — Kenya Top Bar Hive', 'Hives', 'hive', 4500, 2],
-  ['langstroth-hive', 'Langstroth Hive (10-frame)', 'Hives', 'hive', 7500, 2],
-  ['log-hive', 'Traditional Log Hive', 'Hives', 'hive', 1800, 2],
-  ['bee-suit', 'Full Bee Suit', 'Protection', 'suit', 3500, 3],
-  ['bee-veil', 'Bee Veil (Round)', 'Protection', 'veil', 800, 5],
-  ['bee-smoker', 'Bee Smoker', 'Tools', 'piece', 1200, 3],
-  ['hive-tool', 'Hive Tool (J-Type)', 'Tools', 'piece', 350, 5],
-  ['bee-brush', 'Bee Brush', 'Tools', 'piece', 300, 5],
-  ['bee-attractant', 'Bee Attractant', 'Tools', 'bottle', 500, 5],
-  ['foundation-sheet', 'Foundation Sheets', 'Tools', 'sheet', 150, 20],
-  ['frame-feeder', 'Frame Feeder', 'Tools', 'piece', 400, 5],
-  ['honey-extractor', 'Manual Honey Extractor', 'Processing', 'piece', 12000, 1],
-  ['honey-strainer', 'Honey Strainer (Double)', 'Processing', 'piece', 900, 2],
-  ['honey-150g', 'Raw Honey — 150g Jar', 'Honey', 'jar', 350, 20],
-  ['honey-1kg', 'Raw Honey — 1kg Jar', 'Honey', 'jar', 1800, 10],
-  ['honey-bulk', 'Bulk Honey (per kg)', 'Honey', 'kg', 1400, 20],
+  ['ktbh-hive', 'KTBH — Kenya Top Bar Hive', 'Hives', 'hive', 4500, 2, SHOPS],
+  ['langstroth-hive', 'Langstroth Hive (10-frame)', 'Hives', 'hive', 7500, 2, SHOPS],
+  ['log-hive', 'Traditional Log Hive', 'Hives', 'hive', 1800, 2, SHOPS],
+  ['bee-suit', 'Full Bee Suit', 'Protection', 'suit', 3500, 3, SHOPS],
+  ['bee-veil', 'Bee Veil (Round)', 'Protection', 'veil', 800, 5, SHOPS],
+  ['bee-smoker', 'Bee Smoker', 'Tools', 'piece', 1200, 3, SHOPS],
+  ['hive-tool', 'Hive Tool (J-Type)', 'Tools', 'piece', 350, 5, SHOPS],
+  ['bee-brush', 'Bee Brush', 'Tools', 'piece', 300, 5, SHOPS],
+  ['bee-attractant', 'Bee Attractant', 'Tools', 'bottle', 500, 5, SHOPS],
+  ['foundation-sheet', 'Foundation Sheets', 'Tools', 'sheet', 150, 20, SHOPS],
+  ['frame-feeder', 'Frame Feeder', 'Tools', 'piece', 400, 5, SHOPS],
+  ['honey-extractor', 'Manual Honey Extractor', 'Processing', 'piece', 12000, 1, SHOPS],
+  ['honey-strainer', 'Honey Strainer (Double)', 'Processing', 'piece', 900, 2, SHOPS],
+  ['honey-150g', 'Raw Honey — 150g Jar', 'Honey', 'jar', 350, 20, ALL],
+  ['honey-1kg', 'Raw Honey — 1kg Jar', 'Honey', 'jar', 1800, 10, ALL],
+  ['honey-bulk', 'Bulk Honey (per kg)', 'Honey', 'kg', 1400, 20, ALL],
+  ['matoke', 'Matoke', 'Farm produce', 'bunch', 0, 0, 'Farm'],
+  ['ripe-bananas', 'Ripe bananas', 'Farm produce', 'bunch', 0, 0, 'Farm'],
+  ['rabbit', 'Rabbit', 'Livestock', 'head', 0, 0, 'Farm'],
+  ['dorper-sheep', 'Dorper sheep', 'Livestock', 'head', 0, 0, 'Farm'],
+  ['tilapia-fingerling', 'Tilapia fingerlings', 'Fish', 'piece', 0, 0, 'Farm'],
+  ['catfish-fingerling', 'Catfish fingerlings', 'Fish', 'piece', 0, 0, 'Farm'],
+  ['tilapia', 'Tilapia (table size)', 'Fish', 'kg', 0, 0, 'Farm'],
+  ['catfish', 'Catfish (table size)', 'Fish', 'kg', 0, 0, 'Farm'],
 ];
 var SEED_LOCATIONS = [
   ['farm', 'Farm', 'farm'],
   ['kiunduani', 'Kiunduani Shop', 'shop'],
   ['nairobi', 'Nairobi Shop', 'shop'],
 ];
-var TYPES = ['restock', 'transfer', 'sale', 'count'];
+var TYPES = ['restock', 'transfer', 'sale', 'loss', 'count'];
+var LOSS_REASONS = ['spoilt', 'died', 'broken', 'stolen', 'other'];
 
-/** Run once from the editor. Safe to run again: it only adds missing tabs and columns, never overwrites rows. */
+/**
+ * Run once from the editor. Safe to run again: it adds missing tabs, columns and starting items (by itemId),
+ * fills an empty "places" for the starting items, and never changes anything else.
+ * (To stop selling an item, set active = no rather than deleting the row, or setup will add it back.)
+ */
 function setup() {
   var ss = SpreadsheetApp.getActiveSpreadsheet();
   Object.keys(TABS).forEach(function (name) {
@@ -71,10 +92,23 @@ function setup() {
     headers_(sh, TABS[name]);
   });
   var items = ss.getSheetByName('items');
-  if (items.getLastRow() === 1) {
-    var rows = SEED_ITEMS.map(function (r) { return r.concat(['yes']); });
-    items.getRange(2, 1, rows.length, rows[0].length).setValues(rows);
+  var ihead = headers_(items, TABS.items);
+  var have = {};
+  if (items.getLastRow() > 1) {
+    var col = function (h) { return ihead.indexOf(h) + 1; };
+    var vals = items.getRange(2, 1, items.getLastRow() - 1, ihead.length).getValues();
+    vals.forEach(function (r, i) {
+      var id = String(r[col('itemId') - 1]);
+      have[id] = true;
+      var seed = SEED_ITEMS.filter(function (x) { return x[0] === id; })[0];
+      if (seed && String(r[col('places') - 1]).trim() === '') items.getRange(i + 2, col('places')).setValue(seed[6]);
+    });
   }
+  var add = SEED_ITEMS.filter(function (x) { return !have[x[0]]; }).map(function (x) {
+    var v = { itemId: x[0], name: x[1], category: x[2], unit: x[3], price: x[4], reorderLevel: x[5], active: 'yes', places: x[6] };
+    return ihead.map(function (h) { return v.hasOwnProperty(h) ? v[h] : ''; });
+  });
+  if (add.length) items.getRange(items.getLastRow() + 1, 1, add.length, ihead.length).setValues(add);
   var locs = ss.getSheetByName('locations');
   if (locs.getLastRow() === 1) locs.getRange(2, 1, SEED_LOCATIONS.length, 3).setValues(SEED_LOCATIONS);
   var workers = ss.getSheetByName('workers');
@@ -150,7 +184,8 @@ function data_() {
   return {
     items: rows_('items').filter(function (r) { return r.itemId; }).map(function (r) {
       return { id: String(r.itemId), name: String(r.name), category: String(r.category), unit: String(r.unit),
-               price: Number(r.price) || 0, reorderLevel: Number(r.reorderLevel) || 0, active: yes_(r.active) };
+               price: Number(r.price) || 0, reorderLevel: Number(r.reorderLevel) || 0, active: yes_(r.active),
+               places: placeIds_(r.places) };
     }),
     locations: rows_('locations').filter(function (r) { return r.locationId; }).map(function (r) {
       return { id: String(r.locationId), name: String(r.name), role: String(r.role) };
@@ -159,7 +194,8 @@ function data_() {
       return { id: String(r.movementId), date: date_(r.date), type: String(r.type), itemId: String(r.itemId),
                qty: Number(r.qty) || 0, from: String(r.from || ''), to: String(r.to || ''), price: Number(r.price) || 0,
                worker: String(r.worker), note: String(r.note || ''),
-               at: r.at instanceof Date ? r.at.toISOString() : String(r.at) };
+               at: r.at instanceof Date ? r.at.toISOString() : String(r.at),
+               source: String(r.source || ''), supplier: String(r.supplier || ''), cost: Number(r.cost) || 0, reason: String(r.reason || '') };
     }),
   };
 }
@@ -213,10 +249,15 @@ function doPost(e) {
         (!m.from || locs[m.from]) && (!m.to || locs[m.to]);
       if (!ok) { rejected.push(id); reasons[id] = 'invalid'; return; }
       var price = m.type === 'sale' ? Number(m.price) || 0 : '';
+      var bought = m.type === 'restock' && m.source === 'bought';
       var v = {
         movementId: id, date: m.date, type: m.type, itemId: m.itemId, itemName: it.name, qty: qty, unit: it.unit,
         from: m.from || '', to: m.to || '', price: price, amount: m.type === 'sale' ? qty * price : '', worker: who.name,
         note: String(m.note || '').slice(0, 500), at: m.at || '', receivedAt: now,
+        source: m.type === 'restock' ? (bought ? 'bought' : 'own') : '',
+        supplier: bought ? String(m.supplier || '').slice(0, 100) : '',
+        cost: bought ? Math.max(0, Number(m.cost) || 0) : '',
+        reason: m.type === 'loss' ? (LOSS_REASONS.indexOf(m.reason) >= 0 ? m.reason : 'other') : '',
       };
       rows.push(head.map(function (h) { return v.hasOwnProperty(h) ? v[h] : ''; }));
       seen[id] = true;
@@ -367,7 +408,8 @@ function movements_() {
   return rows_('movements').filter(function (r) { return r.movementId; }).map(function (r) {
     return { id: String(r.movementId), date: date_(r.date), type: String(r.type), itemId: String(r.itemId), qty: Number(r.qty) || 0,
              from: String(r.from || ''), to: String(r.to || ''), price: Number(r.price) || 0, worker: String(r.worker),
-             at: r.at instanceof Date ? r.at.toISOString() : String(r.at || '') };
+             at: r.at instanceof Date ? r.at.toISOString() : String(r.at || ''),
+             source: String(r.source || ''), supplier: String(r.supplier || ''), cost: Number(r.cost) || 0, reason: String(r.reason || '') };
   });
 }
 
@@ -382,7 +424,7 @@ function replay_(moves) {
   }).forEach(function (m) {
     if (m.type === 'restock') add(m.itemId, m.to, m.qty);
     else if (m.type === 'transfer') { add(m.itemId, m.from, -m.qty); add(m.itemId, m.to, m.qty); }
-    else if (m.type === 'sale') add(m.itemId, m.from, -m.qty);
+    else if (m.type === 'sale' || m.type === 'loss') add(m.itemId, m.from, -m.qty);
     else if (m.type === 'count') {
       var before = get(m.itemId, m.to);
       add(m.itemId, m.to, m.qty - before);
@@ -399,6 +441,8 @@ function report_(kind, period, asOf) {
   rows_('items').forEach(function (r) { items[String(r.itemId)] = r; });
   var locs = rows_('locations').filter(function (r) { return r.locationId; });
   var shops = locs.filter(function (l) { return String(l.role) === 'shop'; });
+  var places = function (it) { return placeIds_(it.places); };
+  var kept = function (it, id) { var p = places(it); return !p.length || p.indexOf(id) >= 0; };
   var days = Math.round((Date.parse(period.end) - Date.parse(period.start)) / 864e5) + 1;
   var prev = { start: addDays_(period.start, -days), end: addDays_(period.start, -1) };
   if (kind === 'month') prev = monthBefore_(period.start);
@@ -409,11 +453,15 @@ function report_(kind, period, asOf) {
   var prevSales = moves.filter(function (m) { return m.type === 'sale' && inP(m, prev); });
   var total = sales.reduce(function (t, m) { return t + amount(m); }, 0);
 
-  var byShop = shops.map(function (l) {
+  // Sales points: every shop, plus the farm (market sales) when it sold something.
+  var points = locs.filter(function (l) {
+    return String(l.role) === 'shop' || sales.some(function (m) { return m.from === String(l.locationId); });
+  });
+  var byShop = points.map(function (l) {
     var ss = sales.filter(function (m) { return m.from === String(l.locationId); });
     var dayset = {};
     ss.forEach(function (m) { dayset[m.date] = true; });
-    return { name: String(l.name), amount: ss.reduce(function (t, m) { return t + amount(m); }, 0),
+    return { name: String(l.role) === 'shop' ? String(l.name) : String(l.name) + ' (market)', amount: ss.reduce(function (t, m) { return t + amount(m); }, 0),
              units: ss.reduce(function (t, m) { return t + m.qty; }, 0), daysWithSales: Object.keys(dayset).length };
   });
 
@@ -428,6 +476,31 @@ function report_(kind, period, asOf) {
 
   var inPeriod = moves.filter(function (m) { return inP(m, period); });
   var restocked = inPeriod.filter(function (m) { return m.type === 'restock'; }).reduce(function (t, m) { return t + m.qty; }, 0);
+  // Per item: how much was our own (harvest, workshop, born) and how much was bought, and what buying cost.
+  var inMap = {};
+  inPeriod.filter(function (m) { return m.type === 'restock'; }).forEach(function (m) {
+    var x = inMap[m.itemId] || (inMap[m.itemId] = { itemId: m.itemId, own: 0, bought: 0, spent: 0, suppliers: {} });
+    if (m.source === 'bought') {
+      x.bought += m.qty;
+      x.spent += m.qty * m.cost;
+      if (m.supplier) x.suppliers[m.supplier] = true;
+    } else x.own += m.qty;
+  });
+  var incoming = Object.keys(inMap).map(function (k) {
+    var x = inMap[k], it = items[k] || {};
+    return { name: String(it.name || k), unit: String(it.unit || ''), own: x.own, bought: x.bought, spent: x.spent,
+             suppliers: Object.keys(x.suppliers).join(', ') };
+  }).sort(function (a, b) { return a.name < b.name ? -1 : 1; });
+  var lossMap = {};
+  inPeriod.filter(function (m) { return m.type === 'loss'; }).forEach(function (m) {
+    var k = m.itemId + '|' + (m.reason || 'other');
+    var x = lossMap[k] || (lossMap[k] = { itemId: m.itemId, reason: m.reason || 'other', qty: 0 });
+    x.qty += m.qty;
+  });
+  var losses = Object.keys(lossMap).map(function (k) {
+    var x = lossMap[k], it = items[x.itemId] || {};
+    return { name: String(it.name || x.itemId), unit: String(it.unit || ''), reason: x.reason, qty: x.qty, value: x.qty * (Number(it.price) || 0) };
+  });
   var sent = shops.map(function (l) {
     return { name: String(l.name), units: inPeriod.filter(function (m) { return m.type === 'transfer' && m.to === String(l.locationId); })
       .reduce(function (t, m) { return t + m.qty; }, 0) };
@@ -442,7 +515,7 @@ function report_(kind, period, asOf) {
     var it = items[id];
     var level = Number(it.reorderLevel) || 0;
     if (!level || !yes_(it.active)) return;
-    shops.forEach(function (l) {
+    shops.filter(function (l) { return kept(it, String(l.locationId)); }).forEach(function (l) {
       var q = (r.balance[id] && r.balance[id][String(l.locationId)]) || 0;
       if (q <= level) low.push({ name: String(it.name), place: String(l.name), qty: q });
     });
@@ -450,7 +523,7 @@ function report_(kind, period, asOf) {
 
   var out = { kind: kind, period: period, total: total, units: sales.reduce(function (t, m) { return t + m.qty; }, 0),
               prevTotal: prevSales.reduce(function (t, m) { return t + amount(m); }, 0), byShop: byShop, days: days,
-              top: top, restocked: restocked, sent: sent, workers: workers, low: low };
+              top: top, restocked: restocked, incoming: incoming, losses: losses, sent: sent, workers: workers, low: low };
 
   if (kind === 'month') {
     // The month-end count window: last 3 days of the month to the 3rd of the next (same as countWindow in docs/stock.js).
@@ -512,14 +585,25 @@ function reportEmail_(r) {
   lines.push('Beelove ' + (r.kind === 'week' ? 'weekly' : 'monthly') + ' report: ' + label, 'Sales: ' + ksh_(r.total) + ' (' + r.units + ' units)' +
     (change === null ? '' : ', ' + (change >= 0 ? '+' : '') + change + '% vs previous ' + r.kind));
 
-  h('Sales by shop');
-  table(['Shop', 'Sales', 'Units', 'Days with sales'], r.byShop.map(function (b) { return [b.name, ksh_(b.amount), b.units, b.daysWithSales + ' of ' + r.days]; }));
+  h('Sales by place');
+  table(['Where', 'Sales', 'Units', 'Days with sales'], r.byShop.map(function (b) { return [b.name, ksh_(b.amount), b.units, b.daysWithSales + ' of ' + r.days]; }));
   if (r.top.length) {
     h('Best sellers');
     table(['Item', 'Sold', 'Sales'], r.top.map(function (t) { return [t.name, t.units + ' ' + t.unit, ksh_(t.amount)]; }));
   }
-  h('Stock moved');
-  table(['', 'Units'], [['Restocked / harvested', r.restocked]].concat(r.sent.map(function (x) { return ['Sent to ' + x.name, x.units]; })));
+  if (r.incoming.length) {
+    h('New stock: our own and bought');
+    table(['Item', 'Our own', 'Bought', 'Paid', 'Bought from'], r.incoming.map(function (x) {
+      return [x.name, x.own + ' ' + x.unit, x.bought + ' ' + x.unit, ksh_(x.spent), x.suppliers || '–']; }));
+    var paid = r.incoming.reduce(function (t, x) { return t + x.spent; }, 0);
+    if (paid) { html.push('<p style="margin:6px 0 0"><b>Paid for bought stock: ' + ksh_(paid) + '</b></p>'); lines.push('Paid for bought stock: ' + ksh_(paid)); }
+  }
+  h('Sent to shops');
+  table(['Shop', 'Units'], r.sent.map(function (x) { return [x.name, x.units]; }));
+  if (r.losses.length) {
+    h('Losses recorded');
+    table(['Item', 'Reason', 'Lost', 'Value'], r.losses.map(function (x) { return [x.name, x.reason, x.qty + ' ' + x.unit, ksh_(x.value)]; }));
+  }
   if (r.counts) {
     h('Month-end count');
     table(['Place', 'Status'], r.counts.map(function (c) { return [c.name, c.done ? 'Done ' + nice_(c.date) : 'NOT DONE']; }));

@@ -44,6 +44,8 @@
 }
 
 * { box-sizing: border-box; }
+/* Elements with display rules below must still disappear when hidden (item rows filtered by place or search). */
+[hidden] { display: none !important; }
 html { -webkit-text-size-adjust: 100%; scroll-padding-bottom: 170px; }
 body {
   margin: 0;
@@ -191,3 +193,10 @@ details.more summary { cursor: pointer; color: var(--accent-ink); font-weight: 6
 .remind p { margin: 8px 0 12px; font-size: 1rem; }
 .remind .btn { font-size: 1.05rem; }
 .banner.remind-strip { background: var(--accent); color: #fff; font-weight: 600; }
+
+/* Own / bought choice */
+.seg { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.seg label { display: flex; flex-direction: column; gap: 2px; padding: 10px 12px; border: 1px solid var(--line-strong); border-radius: 12px; background: var(--card); cursor: pointer; font-weight: 600; }
+.seg label:has(input:checked) { border: 2px solid var(--accent); background: var(--accent-tint); }
+.seg input { position: absolute; opacity: 0; pointer-events: none; }
+.seg small { font-weight: 400; color: var(--muted); font-size: 0.78rem; }

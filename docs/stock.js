@@ -3,9 +3,11 @@
  * (window.Stock) and in Node tests (require('./stock.js')).
  *
  * A movement is one row the workers capture:
- *   restock  – new stock arrives at a location (harvest, workshop, supplier). Adds qty to `to`.
+ *   restock  – new stock arrives at a location. Adds qty to `to`. `source` is 'own' (harvest, workshop, born)
+ *              or 'bought' (then `supplier` and `cost` = price paid per unit).
  *   transfer – stock moves between locations. Takes qty from `from`, adds it to `to`.
  *   sale     – stock sold. Takes qty from `from`. `price` is the unit price actually charged.
+ *   loss     – stock spoilt, died, broken or stolen. Takes qty from `from`; `reason` says why.
  *   count    – the monthly physical count at `to`. `qty` is what is ON THE SHELF; the balance is set to it
  *              and the difference is kept as an adjustment (loss, damage, mistakes).
  *
@@ -16,7 +18,7 @@
   if (typeof module === 'object' && module.exports) module.exports = factory();
   else root.Stock = factory();
 })(typeof self !== 'undefined' ? self : this, function () {
-  var TYPES = ['restock', 'transfer', 'sale', 'count'];
+  var TYPES = ['restock', 'transfer', 'sale', 'loss', 'count'];
 
   function num(v) {
     var n = Number(v);
@@ -59,7 +61,7 @@
       else if (m.type === 'transfer') {
         add(m.itemId, m.from, -q);
         add(m.itemId, m.to, q);
-      } else if (m.type === 'sale') add(m.itemId, m.from, -q);
+      } else if (m.type === 'sale' || m.type === 'loss') add(m.itemId, m.from, -q);
       else if (m.type === 'count') {
         var before = get(m.itemId, m.to);
         add(m.itemId, m.to, q - before);
@@ -68,6 +70,11 @@
       }
     });
     return { balance: balance, adjustments: adjustments, lastCount: lastCount };
+  }
+
+  /** Is `item` kept at `locationId`? An item with no places listed is kept everywhere. */
+  function kept(item, locationId) {
+    return !item.places || !item.places.length || item.places.indexOf(locationId) >= 0;
   }
 
   function saleAmount(m) {
@@ -109,7 +116,7 @@
         total += q;
       });
       var reorder = num(it.reorderLevel);
-      var lowAt = reorder > 0 ? shops.filter(function (s) { return per[s] <= reorder; }) : [];
+      var lowAt = reorder > 0 ? shops.filter(function (s) { return kept(it, s) && per[s] <= reorder; }) : [];
       return {
         item: it,
         per: per,
@@ -127,7 +134,10 @@
     var months = monthsBack(thisMonth, 12);
     var salesByMonth = {};
     months.forEach(function (k) { salesByMonth[k] = { month: k, amount: 0, units: 0 }; });
-    var cur = { sales: 0, units: 0, restocked: 0, transferred: 0, adjusted: 0, entries: 0 };
+    var cur = { sales: 0, units: 0, restocked: 0, own: 0, bought: 0, spent: 0, transferred: 0, lost: 0, lostValue: 0, adjusted: 0, entries: 0 };
+    var prices = {};
+    items.forEach(function (it) { prices[it.id] = num(it.price); });
+    var lossMap = {};
     var byShop = {};
     shops.forEach(function (s) { byShop[s] = { location: s, amount: 0, units: 0 }; });
     var topMap = {};
@@ -150,6 +160,20 @@
         t.amount += saleAmount(m);
       } else if (m.type === 'restock') cur.restocked += num(m.qty);
       else if (m.type === 'transfer') cur.transferred += num(m.qty);
+      else if (m.type === 'loss') {
+        cur.lost += num(m.qty);
+        cur.lostValue += num(m.qty) * (prices[m.itemId] || 0);
+        var lk = m.itemId + '|' + (m.reason || 'other');
+        var l = lossMap[lk] || (lossMap[lk] = { itemId: m.itemId, reason: m.reason || 'other', qty: 0, value: 0 });
+        l.qty += num(m.qty);
+        l.value += num(m.qty) * (prices[m.itemId] || 0);
+      }
+      if (m.type === 'restock') {
+        if (m.source === 'bought') {
+          cur.bought += num(m.qty);
+          cur.spent += num(m.qty) * num(m.cost);
+        } else cur.own += num(m.qty);
+      }
     });
     r.adjustments.forEach(function (a) {
       if (month(a.movement.date) === thisMonth) cur.adjusted += a.delta;
@@ -167,6 +191,7 @@
       stock: stock,
       stockValue: stock.reduce(function (s, x) { return s + Math.max(0, x.value); }, 0),
       low: low,
+      losses: Object.keys(lossMap).map(function (k) { return lossMap[k]; }).sort(function (a, b) { return b.value - a.value || b.qty - a.qty; }),
       month: cur,
       salesByShop: Object.keys(byShop).map(function (k) { return byShop[k]; }),
       salesByMonth: months.map(function (k) { return salesByMonth[k]; }),
@@ -224,6 +249,6 @@
     return movements.some(function (m) { return m.type === 'count' && m.to === locationId && m.date >= start; });
   }
 
-  return { TYPES: TYPES, replay: replay, summarise: summarise, onHand: onHand, monthsBack: monthsBack, sortMovements: sortMovements,
+  return { TYPES: TYPES, kept: kept, replay: replay, summarise: summarise, onHand: onHand, monthsBack: monthsBack, sortMovements: sortMovements,
            soldOn: soldOn, daysLeftInMonth: daysLeftInMonth, countWindow: countWindow, countedSince: countedSince };
 });

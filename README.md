@@ -11,10 +11,23 @@ Everything goes into a Google Sheet that you own.
 
 | Button | When | What it does |
 |---|---|---|
-| 📦 Restock / harvest | New stock arrives (harvest, workshop, supplier) | Adds to the farm, or to a shop |
+| 📦 Restock / harvest | New stock arrives | Adds to a place. Asks **Our own** (harvested, made in the workshop, born) or **Bought** (from whom, and the price paid for one) |
 | 🚚 Send stock | Stock leaves the farm for a shop (or between shops) | Takes from one place, adds to the other |
-| 🧾 Record sales | End of the day, or after each sale | Takes from the shop; records the price charged |
-| 📋 Monthly count | Once a month at each place | Sets stock to what is really on the shelf; the difference is shown as missing or extra |
+| 🧾 Record sales | End of the day, or after each sale | Takes from a shop, or from the **Farm (market)** for produce, animals and fish sold at the market |
+| ⚠️ Record loss | Something spoilt, died, broke or was stolen | Takes from a place, with the reason |
+| 📋 Monthly count | End of every month, at each place | Sets stock to what is really there; the difference shows as missing or extra |
+
+**Where things are kept.** Each item has `places` in the items tab: honey `Farm, Kiunduani Shop, Nairobi Shop`,
+hives and equipment `Kiunduani Shop, Nairobi Shop`, bananas, rabbits, sheep and fish `Farm`. Forms only list the
+items kept at the chosen place, so the shop never sees sheep and the farm never sees bee suits.
+
+**Typical flows**
+- Honey we harvest: Restock at Farm → *Our own*. Honey bought from farmers: Restock at Farm → *Bought*, with the
+  farmer's name and price per kg. Then *Send stock* to the shops.
+- Hives from the workshop: Restock at Kiunduani Shop → *Our own*. Equipment from a supplier: Restock at the shop → *Bought*.
+- Matoke / ripe bananas: Restock at Farm when harvested → *Record sales* at *Farm (market)*. Rotten bunches → *Record loss*.
+- Rabbits, Dorper sheep, fish: Restock at Farm when born / stocked → *Record sales* at *Farm (market)*;
+  deaths → *Record loss*; the monthly count is the headcount.
 
 **No signal?** Workers record as normal. Entries wait on the phone ("3 waiting for signal" at the top) and
 are sent automatically when signal returns. Only the very first sign-in on a phone needs signal.
@@ -30,7 +43,8 @@ Email is a backup: at 6pm (sales) and on the last day of the month (count), the 
 
 **Reports, to the owner only.** Every Monday morning a weekly report, and on the 4th of each month a monthly report
 (it waits for counts done on the 1st–3rd), are emailed to the Google account that owns the sheet, and nobody else:
-sales by shop, best sellers, stock moved, month-end counts and missing stock, low stock, and who recorded what.
+sales by shop and at the market, best sellers, new stock split into our own and bought (who from, and what was
+paid), stock sent to shops, losses with reasons, month-end counts and missing stock, low stock, and who recorded what.
 To see one now, run `sendTestReport` in Apps Script.
 
 Each worker signs in with **their name and a PIN**. The sheet records the signed-in name on every
@@ -46,10 +60,11 @@ entry, so you can tell who did what. The worker's name comes from the sheet, nev
 
 ## Items
 
-The 16 items come from the website's beekeeping shop page, with the same names and prices.
-The **reorder levels are my first guess**. Change them in the sheet.
-To add fish products or anything else, add a row to the `items` tab.
-Workers see the change the next time their app refreshes.
+The 16 beekeeping items come from the website's shop page, with the same names and prices; the
+**reorder levels are a first guess**. Matoke, ripe bananas, rabbits, Dorper sheep, tilapia and catfish
+(fingerlings per piece, table fish per kg) start at **price 0**: workers type the price at each sale until you
+fill it in. Change anything in the `items` tab; add a row for a new item (give it a unique `itemId` and its `places`).
+To stop selling something set `active` to `no` (don't delete the row). Workers see changes on their next refresh.
 
 ## Setting it up (about 15 minutes, one time)
 
