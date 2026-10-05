@@ -200,3 +200,10 @@ details.more summary { cursor: pointer; color: var(--accent-ink); font-weight: 6
 .seg label:has(input:checked) { border: 2px solid var(--accent); background: var(--accent-tint); }
 .seg input { position: absolute; opacity: 0; pointer-events: none; }
 .seg small { font-weight: 400; color: var(--muted); font-size: 0.78rem; }
+
+/* Honey flow: 8 columns must fit a phone. */
+table.flow { font-size: 0.78rem; }
+table.flow th, table.flow td { padding: 7px 4px; }
+table.flow th:first-child, table.flow td:first-child { padding-left: 10px; }
+table.flow th:last-child, table.flow td:last-child { padding-right: 10px; }
+table.flow th { font-size: 0.66rem; letter-spacing: 0.02em; }

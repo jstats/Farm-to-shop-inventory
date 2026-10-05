@@ -15,6 +15,8 @@ Everything goes into a Google Sheet that you own.
 | 🚚 Send stock | Stock leaves the farm for a shop (or between shops) | Takes from one place, adds to the other |
 | 🧾 Record sales | End of the day, or after each sale | Takes from a shop, or from the **Farm (market)** for produce, animals and fish sold at the market |
 | ⚠️ Record loss | Something spoilt, died, broke or was stolen | Takes from a place, with the reason |
+| 🍯 Pack honey | Bulk honey is put into jars and bottles (shown to people who work where bulk honey is kept) | Takes the kg used from bulk honey, adds the jars/bottles filled, and shows what was left on the equipment |
+| 📥 Delivery arrived | A card appears at the shop when stock is sent to it | The shop types what actually arrived; anything short is recorded as lost on the way, with who sent and who received |
 | 📋 Monthly count | End of every month, at each place | Sets stock to what is really there; the difference shows as missing or extra |
 
 **Where things are kept.** Each item has `places` in the items tab: honey `Farm, Kiunduani Shop, Nairobi Shop`,
@@ -22,8 +24,9 @@ hives and equipment `Kiunduani Shop, Nairobi Shop`, bananas, rabbits, sheep and 
 items kept at the chosen place, so the shop never sees sheep and the farm never sees bee suits.
 
 **Typical flows**
-- Honey we harvest: Restock at Farm → *Our own*. Honey bought from farmers: Restock at Farm → *Bought*, with the
-  farmer's name and price per kg. Then *Send stock* to the shops.
+- Honey we harvest: Restock *Raw honey — bulk (kg)* at Farm → *Our own*. Honey bought from farmers: the same → *Bought*,
+  with the farmer's name and price per kg. Then *Pack honey* into jars and bottles, *Send stock* to the shops,
+  and the shop confirms the delivery.
 - Hives from the workshop: Restock at Kiunduani Shop → *Our own*. Equipment from a supplier: Restock at the shop → *Bought*.
 - Matoke / ripe bananas: Restock at Farm when harvested → *Record sales* at *Farm (market)*. Rotten bunches → *Record loss*.
 - Rabbits, Dorper sheep, fish: Restock at Farm when born / stocked → *Record sales* at *Farm (market)*;
@@ -31,6 +34,11 @@ items kept at the chosen place, so the shop never sees sheep and the farm never 
 
 **No signal?** Workers record as normal. Entries wait on the phone ("3 waiting for signal" at the top) and
 are sent automatically when signal returns. Only the very first sign-in on a phone needs signal.
+
+**Following the honey.** The dashboard's *Honey flow* table (and the monthly report) shows, per place and honey product,
+Start + In − Out − Sold − Lost ± Count = Now, with totals in kg. Every kilo is followed from the hive or the farmer,
+through packing (`kgEach` in the items tab says how much honey each jar or bottle holds), delivery and the shelf, to the
+sale. Unexplained gaps show up as delivery shortfalls (who sent, who received) or as count differences (which shop).
 
 **Reminders.** The app is the main reminder. When a worker opens it, a big card at the top says what is due,
 with one button straight to the right form, and a strip shows on every other screen until it is done:

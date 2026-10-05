@@ -4,13 +4,15 @@
  * The sheet is the record. Workers' phones send stock movements here; the app's dashboard reads them back.
  *   items      – what we sell. Edit names, prices and reorder levels here; set active = no to hide an item.
  *                places = where the item is kept (e.g. "Farm" or "Kiunduani Shop, Nairobi Shop"); empty = everywhere.
- *                Forms only list the items kept at the chosen place.
+ *                Forms only list the items kept at the chosen place. kgEach = kg of honey in one unit (honey only).
  *   locations  – the farm and the shops (Kiunduani, Nairobi). Add a row with role = shop for a new branch.
  *   workers    – who may sign in: name + PIN. Set active = no when someone leaves. email + place decide who gets
  *                which reminder; place is where they work, several separated by commas (e.g. "Farm, Kiunduani Shop").
  *   movements  – one row per captured movement. Never edit "movementId"; fix mistakes with a new count.
  *                Restocks say source = own (harvest, workshop, born) or bought (supplier + cost per unit);
- *                losses say reason = spoilt / died / broken / stolen / other.
+ *                losses say reason = spoilt / died / broken / stolen / other. Lines saved together share a batch:
+ *                a delivery (transfer) is confirmed by receive lines with the same batch (qty arrived of sent);
+ *                a packing (pack) takes kg from bulk honey (from) and adds jars/bottles (to).
  *
  * Every request carries the worker's name and PIN. The worker recorded on a movement is the signed-in
  * worker, never a name the phone sends. After MAX_FAILS wrong PINs a name is locked for LOCK_MINUTES.
@@ -33,15 +35,15 @@ var REPORT_HOUR = 7;    // weekly report on Mondays, monthly report on the REPOR
 var REPORT_MONTH_DAY = 4;  // the month-end count may be done up to the 3rd, so the monthly report waits for it
 
 var TABS = {
-  items:     ['itemId', 'name', 'category', 'unit', 'price', 'reorderLevel', 'active', 'places'],
+  items:     ['itemId', 'name', 'category', 'unit', 'price', 'reorderLevel', 'active', 'places', 'kgEach'],
   locations: ['locationId', 'name', 'role'],
   workers:   ['name', 'pin', 'active', 'email', 'place'],
   movements: ['movementId', 'date', 'type', 'itemId', 'itemName', 'qty', 'unit', 'from', 'to', 'price', 'amount',
-              'worker', 'note', 'at', 'receivedAt', 'source', 'supplier', 'cost', 'reason'],
+              'worker', 'note', 'at', 'receivedAt', 'source', 'supplier', 'cost', 'reason', 'batch', 'sent'],
 };
 
 // From beelovefarm.org/shop/beekeeping (October 2026), plus farm produce, livestock and fish (prices to be set in the sheet).
-// reorderLevel = warn when a shop has this many or fewer. Last column = places (where it is kept).
+// reorderLevel = warn when a shop has this many or fewer. Then places (where it is kept) and, for honey, kgEach.
 // Same rows as docs/seed.js (a test keeps them equal).
 var SHOPS = 'Kiunduani Shop, Nairobi Shop';
 var ALL = 'Farm, Kiunduani Shop, Nairobi Shop';
@@ -68,11 +70,11 @@ var SEED_ITEMS = [
   ['cone-strainer', 'Cone Honey Strainer', 'Processing', 'piece', 900, 2, SHOPS],
   ['uncapping-fork', 'Uncapping Fork', 'Processing', 'piece', 700, 2, SHOPS],
   ['honey-bucket', 'Food-Grade Honey Bucket (20L)', 'Processing', 'bucket', 1200, 2, SHOPS],
-  ['honey-150g', 'Raw Organic Honey — 150g Jar', 'Honey', 'jar', 150, 20, ALL],
-  ['honey-300g', 'Raw Organic Honey — 300g Squeeze Bottle', 'Honey', 'bottle', 300, 10, ALL],
-  ['honey-500g', 'Raw Organic Honey — 500g Squeeze Bottle', 'Honey', 'bottle', 500, 10, ALL],
-  ['honey-1kg', 'Raw Organic Honey — 1kg Jar', 'Honey', 'jar', 1000, 10, ALL],
-  ['honey-bulk', 'Raw honey — bulk (per kg)', 'Honey', 'kg', 0, 0, 'Farm'],
+  ['honey-150g', 'Raw Organic Honey — 150g Jar', 'Honey', 'jar', 150, 20, ALL, 0.15],
+  ['honey-300g', 'Raw Organic Honey — 300g Squeeze Bottle', 'Honey', 'bottle', 300, 10, ALL, 0.3],
+  ['honey-500g', 'Raw Organic Honey — 500g Squeeze Bottle', 'Honey', 'bottle', 500, 10, ALL, 0.5],
+  ['honey-1kg', 'Raw Organic Honey — 1kg Jar', 'Honey', 'jar', 1000, 10, ALL, 1],
+  ['honey-bulk', 'Raw honey — bulk (per kg)', 'Honey', 'kg', 0, 0, 'Farm', 1],
   ['matoke', 'Matoke', 'Farm produce', 'bunch', 0, 0, 'Farm'],
   ['ripe-bananas', 'Ripe bananas', 'Farm produce', 'bunch', 0, 0, 'Farm'],
   ['rabbit', 'Rabbit', 'Livestock', 'head', 0, 0, 'Farm'],
@@ -89,7 +91,7 @@ var SEED_LOCATIONS = [
   ['kiunduani', 'Kiunduani Shop', 'shop'],
   ['nairobi', 'Nairobi Shop', 'shop'],
 ];
-var TYPES = ['restock', 'transfer', 'sale', 'loss', 'count'];
+var TYPES = ['restock', 'transfer', 'receive', 'sale', 'loss', 'pack', 'count'];
 var LOSS_REASONS = ['spoilt', 'died', 'broken', 'stolen', 'other'];
 
 /**
@@ -115,10 +117,11 @@ function setup() {
       have[id] = true;
       var seed = SEED_ITEMS.filter(function (x) { return x[0] === id; })[0];
       if (seed && String(r[col('places') - 1]).trim() === '') items.getRange(i + 2, col('places')).setValue(seed[6]);
+      if (seed && seed[7] && String(r[col('kgEach') - 1]).trim() === '') items.getRange(i + 2, col('kgEach')).setValue(seed[7]);
     });
   }
   var add = SEED_ITEMS.filter(function (x) { return !have[x[0]]; }).map(function (x) {
-    var v = { itemId: x[0], name: x[1], category: x[2], unit: x[3], price: x[4], reorderLevel: x[5], active: 'yes', places: x[6] };
+    var v = { itemId: x[0], name: x[1], category: x[2], unit: x[3], price: x[4], reorderLevel: x[5], active: 'yes', places: x[6], kgEach: x[7] || '' };
     return ihead.map(function (h) { return v.hasOwnProperty(h) ? v[h] : ''; });
   });
   if (add.length) items.getRange(items.getLastRow() + 1, 1, add.length, ihead.length).setValues(add);
@@ -158,6 +161,7 @@ function applyWebsitePrices() {
       r[col('unit')] = seed[3];
       r[col('price')] = seed[4];
       r[col('places')] = seed[6];
+      r[col('kgEach')] = seed[7] || '';
       if (String(r[col('reorderLevel')]).trim() === '') r[col('reorderLevel')] = seed[5];
     } else if (RETIRED.indexOf(id) >= 0) {
       r[col('active')] = 'no';
@@ -168,7 +172,7 @@ function applyWebsitePrices() {
     }
   });
   var add = SEED_ITEMS.filter(function (x) { return !have[x[0]]; }).map(function (x) {
-    var v = { itemId: x[0], name: x[1], category: x[2], unit: x[3], price: x[4], reorderLevel: x[5], active: 'yes', places: x[6] };
+    var v = { itemId: x[0], name: x[1], category: x[2], unit: x[3], price: x[4], reorderLevel: x[5], active: 'yes', places: x[6], kgEach: x[7] || '' };
     changed.push(x[0] + ' (new)');
     return head.map(function (h) { return v.hasOwnProperty(h) ? v[h] : ''; });
   });
@@ -241,7 +245,7 @@ function data_() {
     items: rows_('items').filter(function (r) { return r.itemId; }).map(function (r) {
       return { id: String(r.itemId), name: String(r.name), category: String(r.category), unit: String(r.unit),
                price: Number(r.price) || 0, reorderLevel: Number(r.reorderLevel) || 0, active: yes_(r.active),
-               places: placeIds_(r.places) };
+               places: placeIds_(r.places), kgEach: Number(r.kgEach) || 0 };
     }),
     locations: rows_('locations').filter(function (r) { return r.locationId; }).map(function (r) {
       return { id: String(r.locationId), name: String(r.name), role: String(r.role) };
@@ -251,7 +255,8 @@ function data_() {
                qty: Number(r.qty) || 0, from: String(r.from || ''), to: String(r.to || ''), price: Number(r.price) || 0,
                worker: String(r.worker), note: String(r.note || ''),
                at: r.at instanceof Date ? r.at.toISOString() : String(r.at),
-               source: String(r.source || ''), supplier: String(r.supplier || ''), cost: Number(r.cost) || 0, reason: String(r.reason || '') };
+               source: String(r.source || ''), supplier: String(r.supplier || ''), cost: Number(r.cost) || 0, reason: String(r.reason || ''),
+               batch: String(r.batch || ''), sent: Number(r.sent) || 0 };
     }),
   };
 }
@@ -303,6 +308,9 @@ function doPost(e) {
       var qty = Number(m.qty);
       var ok = it && TYPES.indexOf(m.type) >= 0 && isFinite(qty) && qty >= 0 && /^\d{4}-\d{2}-\d{2}$/.test(m.date) &&
         (!m.from || locs[m.from]) && (!m.to || locs[m.to]);
+      // Packing lines take from one place or add to it, never both; a confirmation says what was sent and which delivery.
+      if (ok && m.type === 'pack') ok = !!m.from !== !!m.to && !!m.batch;
+      if (ok && m.type === 'receive') ok = !!m.from && !!m.to && !!m.batch && isFinite(Number(m.sent)) && Number(m.sent) >= 0;
       if (!ok) { rejected.push(id); reasons[id] = 'invalid'; return; }
       var price = m.type === 'sale' ? Number(m.price) || 0 : '';
       var bought = m.type === 'restock' && m.source === 'bought';
@@ -314,6 +322,8 @@ function doPost(e) {
         supplier: bought ? String(m.supplier || '').slice(0, 100) : '',
         cost: bought ? Math.max(0, Number(m.cost) || 0) : '',
         reason: m.type === 'loss' ? (LOSS_REASONS.indexOf(m.reason) >= 0 ? m.reason : 'other') : '',
+        batch: String(m.batch || '').slice(0, 80),
+        sent: m.type === 'receive' ? Number(m.sent) : '',
       };
       rows.push(head.map(function (h) { return v.hasOwnProperty(h) ? v[h] : ''; }));
       seen[id] = true;
@@ -465,7 +475,8 @@ function movements_() {
     return { id: String(r.movementId), date: date_(r.date), type: String(r.type), itemId: String(r.itemId), qty: Number(r.qty) || 0,
              from: String(r.from || ''), to: String(r.to || ''), price: Number(r.price) || 0, worker: String(r.worker),
              at: r.at instanceof Date ? r.at.toISOString() : String(r.at || ''),
-             source: String(r.source || ''), supplier: String(r.supplier || ''), cost: Number(r.cost) || 0, reason: String(r.reason || '') };
+             source: String(r.source || ''), supplier: String(r.supplier || ''), cost: Number(r.cost) || 0, reason: String(r.reason || ''),
+             batch: String(r.batch || ''), sent: Number(r.sent) || 0 };
   });
 }
 
@@ -481,6 +492,8 @@ function replay_(moves) {
     if (m.type === 'restock') add(m.itemId, m.to, m.qty);
     else if (m.type === 'transfer') { add(m.itemId, m.from, -m.qty); add(m.itemId, m.to, m.qty); }
     else if (m.type === 'sale' || m.type === 'loss') add(m.itemId, m.from, -m.qty);
+    else if (m.type === 'pack') { if (m.from) add(m.itemId, m.from, -m.qty); else add(m.itemId, m.to, m.qty); }
+    else if (m.type === 'receive') add(m.itemId, m.to, m.qty - m.sent);
     else if (m.type === 'count') {
       var before = get(m.itemId, m.to);
       add(m.itemId, m.to, m.qty - before);
@@ -488,6 +501,55 @@ function replay_(moves) {
     }
   });
   return { balance: bal, adjustments: adjustments };
+}
+
+/** Same as flow() in docs/stock.js (a test keeps them equal): start + in − out − sold − lost + countDiff = end. */
+function flow_(moves, itemIds, placeIds, start, end) {
+  var opening = replay_(moves.filter(function (m) { return m.date < start; })).balance;
+  var upto = replay_(moves.filter(function (m) { return m.date <= end; }));
+  var rows = {};
+  function row(item, place) {
+    var k = item + '|' + place;
+    if (!rows[k]) rows[k] = { itemId: item, place: place, start: (opening[item] && opening[item][place]) || 0, in: 0, out: 0, sold: 0, lost: 0, countDiff: 0, end: 0, packIn: 0, packOut: 0 };
+    return rows[k];
+  }
+  var want = function (item, place) { return place && itemIds.indexOf(item) >= 0 && placeIds.indexOf(place) >= 0; };
+  moves.forEach(function (m) {
+    if (m.date < start || m.date > end) return;
+    var q = m.qty, i = m.itemId;
+    if (m.type === 'restock' && want(i, m.to)) row(i, m.to).in += q;
+    else if (m.type === 'transfer') { if (want(i, m.from)) row(i, m.from).out += q; if (want(i, m.to)) row(i, m.to).in += q; }
+    else if (m.type === 'receive' && want(i, m.to)) row(i, m.to).lost += m.sent - q;
+    else if (m.type === 'sale' && want(i, m.from)) row(i, m.from).sold += q;
+    else if (m.type === 'loss' && want(i, m.from)) row(i, m.from).lost += q;
+    else if (m.type === 'pack') {
+      if (m.from && want(i, m.from)) { row(i, m.from).out += q; row(i, m.from).packOut += q; }
+      if (!m.from && want(i, m.to)) { row(i, m.to).in += q; row(i, m.to).packIn += q; }
+    }
+  });
+  upto.adjustments.forEach(function (a) {
+    if (a.movement.date >= start && want(a.movement.itemId, a.movement.to)) row(a.movement.itemId, a.movement.to).countDiff += a.delta;
+  });
+  itemIds.forEach(function (i) {
+    placeIds.forEach(function (p) { if ((opening[i] && opening[i][p]) || (upto.balance[i] && upto.balance[i][p])) row(i, p); });
+  });
+  return Object.keys(rows).map(function (k) {
+    var r = rows[k];
+    r.end = r.start + r.in - r.out - r.sold - r.lost + r.countDiff;
+    return r;
+  });
+}
+
+/** Same as flowKg() in docs/stock.js: kg totals with packing treated as a conversion (its leftover counts as lost). */
+function flowKg_(rows, kgEach) {
+  var t = { start: 0, in: 0, out: 0, sold: 0, lost: 0, countDiff: 0, end: 0 };
+  rows.forEach(function (r) {
+    var k = kgEach(r.itemId) || 0;
+    t.start += r.start * k; t.in += (r.in - r.packIn) * k; t.out += (r.out - r.packOut) * k; t.sold += r.sold * k;
+    t.lost += (r.lost + r.packOut) * k - r.packIn * k; t.countDiff += r.countDiff * k; t.end += r.end * k;
+  });
+  Object.keys(t).forEach(function (f) { t[f] = Math.round(t[f] * 100) / 100; });
+  return t;
 }
 
 /** Everything the report says about [period.start, period.end]. `asOf` = the day the report is made. */
@@ -544,8 +606,8 @@ function report_(kind, period, asOf) {
   });
   var incoming = Object.keys(inMap).map(function (k) {
     var x = inMap[k], it = items[k] || {};
-    return { name: String(it.name || k), unit: String(it.unit || ''), own: x.own, bought: x.bought, spent: x.spent,
-             suppliers: Object.keys(x.suppliers).join(', ') };
+    return { name: String(it.name || k), unit: String(it.unit || ''), category: String(it.category || ''), own: x.own, bought: x.bought,
+             spent: x.spent, suppliers: Object.keys(x.suppliers).join(', ') };
   }).sort(function (a, b) { return a.name < b.name ? -1 : 1; });
   var lossMap = {};
   inPeriod.filter(function (m) { return m.type === 'loss'; }).forEach(function (m) {
@@ -577,9 +639,38 @@ function report_(kind, period, asOf) {
     });
   });
 
+  // Honey: flow per product and place (kg totals per place), packing, and deliveries.
+  var honey = Object.keys(items).filter(function (id) { return String(items[id].category) === 'Honey'; });
+  var kgOf = function (id) { return Number(items[id] && items[id].kgEach) || 0; };
+  var placeName = function (id) { var l = locs.filter(function (x) { return String(x.locationId) === id; })[0]; return l ? String(l.name) : id; };
+  var honeyFlow = flow_(moves, honey, locs.map(function (l) { return String(l.locationId); }), period.start, period.end)
+    .filter(function (r) { return r.start || r.in || r.out || r.sold || r.lost || r.countDiff || r.end; })
+    .map(function (r) { r.name = String(items[r.itemId].name); r.unit = String(items[r.itemId].unit); r.placeName = placeName(r.place); r.kg = kgOf(r.itemId); return r; })
+    .sort(function (a, b) { return a.placeName === b.placeName ? (a.name < b.name ? -1 : 1) : (a.placeName < b.placeName ? -1 : 1); });
+  var packs = inPeriod.filter(function (m) { return m.type === 'pack'; });
+  var packing = {
+    times: Object.keys(packs.reduce(function (o, m) { o[m.batch] = true; return o; }, {})).length,
+    kgTaken: packs.filter(function (m) { return m.from; }).reduce(function (t, m) { return t + m.qty * (kgOf(m.itemId) || 1); }, 0),
+    kgPacked: packs.filter(function (m) { return !m.from; }).reduce(function (t, m) { return t + m.qty * kgOf(m.itemId); }, 0),
+  };
+  var short = inPeriod.filter(function (m) { return m.type === 'receive' && m.qty !== m.sent; }).map(function (m) {
+    var sentBy = moves.filter(function (t) { return t.type === 'transfer' && t.batch === m.batch && t.itemId === m.itemId; })[0];
+    return { date: m.date, name: String((items[m.itemId] || {}).name || m.itemId), from: placeName(m.from), to: placeName(m.to),
+             sent: m.sent, arrived: m.qty, sender: sentBy ? sentBy.worker : '', receiver: m.worker };
+  });
+  var confirmed = {};
+  moves.forEach(function (m) { if (m.type === 'receive') confirmed[m.batch + '|' + m.to] = true; });
+  var unconfirmed = {};
+  moves.forEach(function (m) {
+    if (m.type !== 'transfer' || !m.batch || m.date > addDays_(asOf, -2) || m.date < addDays_(asOf, -40) || confirmed[m.batch + '|' + m.to]) return;
+    unconfirmed[m.batch + '|' + m.to] = { date: m.date, from: placeName(m.from), to: placeName(m.to), sender: m.worker };
+  });
+
   var out = { kind: kind, period: period, total: total, units: sales.reduce(function (t, m) { return t + m.qty; }, 0),
               prevTotal: prevSales.reduce(function (t, m) { return t + amount(m); }, 0), byShop: byShop, days: days,
-              top: top, restocked: restocked, incoming: incoming, losses: losses, sent: sent, workers: workers, low: low };
+              top: top, restocked: restocked, incoming: incoming, losses: losses, sent: sent, workers: workers, low: low,
+              honeyFlow: honeyFlow, packing: packing, short: short,
+              unconfirmed: Object.keys(unconfirmed).map(function (k) { return unconfirmed[k]; }) };
 
   if (kind === 'month') {
     // The month-end count window: last 3 days of the month to the 3rd of the next (same as countWindow in docs/stock.js).
@@ -599,6 +690,11 @@ function report_(kind, period, asOf) {
     out.missingValue = out.differences.reduce(function (t, d) { return t + Math.min(0, d.value); }, 0);
   }
   return out;
+}
+
+/** "Raw Organic Honey — 150g Jar" → "150g Jar", for narrow tables. */
+function shortName_(name) {
+  return String(name).replace(/^Raw (Organic )?[Hh]oney — /, '').replace(/^bulk \(per kg\)$/, 'Bulk honey (kg)').replace(/ Squeeze Bottle$/, ' bottle');
 }
 
 function ksh_(n) {
@@ -623,15 +719,19 @@ function reportEmail_(r) {
   var change = r.prevTotal ? Math.round((r.total - r.prevTotal) / r.prevTotal * 100) : null;
   var lines = [];
   var html = [];
-  var td = 'style="padding:6px 10px;border-bottom:1px solid #e2e3da"';
-  var tdr = 'style="padding:6px 10px;border-bottom:1px solid #e2e3da;text-align:right;white-space:nowrap"';
+  var td = 'style="padding:6px 6px;border-bottom:1px solid #e2e3da"';
+  var tdr = 'style="padding:6px 6px;border-bottom:1px solid #e2e3da;text-align:right;white-space:nowrap"';
+  var tdw = 'style="padding:6px 6px;border-bottom:1px solid #e2e3da;text-align:right"';
   function h(t) { html.push('<h3 style="margin:22px 0 6px;font-size:16px">' + esc_(t) + '</h3>'); lines.push('', t.toUpperCase()); }
   function table(head, rows) {
-    html.push('<table style="border-collapse:collapse;width:100%;font-size:14px"><tr>' + head.map(function (x, i) {
+    html.push('<table style="border-collapse:collapse;width:100%;font-size:13px"><tr>' + head.map(function (x, i) {
       return '<th ' + (i ? tdr : td) + '>' + esc_(x) + '</th>'; }).join('') + '</tr>' +
-      rows.map(function (row) { return '<tr>' + row.map(function (x, i) { return '<td ' + (i ? tdr : td) + '>' + esc_(x) + '</td>'; }).join('') + '</tr>'; }).join('') +
-      '</table>');
-    rows.forEach(function (row) { lines.push('- ' + row.join(' | ')); });
+      rows.map(function (row) {
+        if (row.heading) return '<tr><td colspan="' + head.length + '" style="padding:10px 10px 4px;font-weight:bold;border-bottom:1px solid #cfd1c6">' + esc_(row.heading) + '</td></tr>';
+        // Short values (amounts, counts) stay on one line; longer text (names, routes) may wrap.
+        return '<tr>' + row.map(function (x, i) { return '<td ' + (i ? (String(x).length <= 14 ? tdr : tdw) : td) + '>' + esc_(x) + '</td>'; }).join('') + '</tr>';
+      }).join('') + '</table>');
+    rows.forEach(function (row) { lines.push(row.heading ? row.heading + ':' : '- ' + row.join(' | ')); });
   }
 
   html.push('<div style="font-family:Arial,sans-serif;color:#1c1f1a;max-width:620px">');
@@ -649,10 +749,52 @@ function reportEmail_(r) {
   }
   if (r.incoming.length) {
     h('New stock: our own and bought');
-    table(['Item', 'Our own', 'Bought', 'Paid', 'Bought from'], r.incoming.map(function (x) {
-      return [x.name, x.own + ' ' + x.unit, x.bought + ' ' + x.unit, ksh_(x.spent), x.suppliers || '–']; }));
+    // Honey, farm produce, animals and fish, and anything bought, one row each; the workshop's own items in one line.
+    var farmCats = ['Honey', 'Farm produce', 'Livestock', 'Fish'];
+    var listed = r.incoming.filter(function (x) { return x.bought || farmCats.indexOf(x.category) >= 0; });
+    var rest = r.incoming.filter(function (x) { return listed.indexOf(x) < 0; });
+    var rowsIn = listed.map(function (x) { return [shortName_(x.name), x.own + ' ' + x.unit, x.bought ? x.bought + ' ' + x.unit : '–', x.spent ? ksh_(x.spent) : '–', x.suppliers || '–']; });
+    if (rest.length) rowsIn.push(['Workshop / other own stock (' + rest.length + ' items)', rest.reduce(function (t, x) { return t + x.own; }, 0) + ' units', '–', '–', '–']);
+    table(['Item', 'Our own', 'Bought', 'Paid', 'Bought from'], rowsIn);
     var paid = r.incoming.reduce(function (t, x) { return t + x.spent; }, 0);
     if (paid) { html.push('<p style="margin:6px 0 0"><b>Paid for bought stock: ' + ksh_(paid) + '</b></p>'); lines.push('Paid for bought stock: ' + ksh_(paid)); }
+  }
+  if (r.packing.times) {
+    h('Packing');
+    var waste = r.packing.kgTaken - r.packing.kgPacked;
+    table(['', 'kg'], [['Bulk honey taken (' + r.packing.times + ' packing' + (r.packing.times === 1 ? '' : 's') + ')', r.packing.kgTaken.toFixed(1)],
+      ['Filled into jars and bottles', r.packing.kgPacked.toFixed(1)], ['Left on equipment / wasted', waste.toFixed(1)]]);
+  }
+  if (r.honeyFlow.length) {
+    h('Honey flow');
+    html.push('<p style="margin:0 0 6px;color:#565d52;font-size:13px">Start + In − Out − Sold − Lost ± Count difference = End. ' +
+      'In = harvested, bought, packed or delivered; Out = sent away or used for packing; Lost includes delivery shortfalls. ' +
+      'In the kg totals packing is only a change of container, so honey left on the equipment shows as Lost.</p>');
+    var flowRows = [];
+    var places = [];
+    r.honeyFlow.forEach(function (x) { if (places.indexOf(x.placeName) < 0) places.push(x.placeName); });
+    places.forEach(function (p) {
+      var rs = r.honeyFlow.filter(function (x) { return x.placeName === p; });
+      flowRows.push({ heading: p });
+      rs.forEach(function (x) {
+        flowRows.push([shortName_(x.name), x.start, x.in, x.out, x.sold, x.lost, (x.countDiff > 0 ? '+' : '') + x.countDiff, x.end]);
+      });
+      var kgs = {};
+      rs.forEach(function (x) { kgs[x.itemId] = x.kg; });
+      var t = flowKg_(rs, function (id) { return kgs[id]; });
+      var f1 = function (n) { return n.toFixed(1); };
+      flowRows.push(['Total kg', f1(t.start), f1(t.in), f1(t.out), f1(t.sold), f1(t.lost), f1(t.countDiff), f1(t.end)]);
+    });
+    table(['Item', 'Start', 'In', 'Out', 'Sold', 'Lost', '±', 'End'], flowRows);
+  }
+  if (r.short.length) {
+    h('Deliveries that arrived short');
+    table(['Item', 'Sent', 'Arrived', 'When, route and people'], r.short.map(function (x) {
+      return [shortName_(x.name), x.sent, x.arrived, nice_(x.date) + ': ' + x.from + ' → ' + x.to + ', sent by ' + x.sender + ', received by ' + x.receiver]; }));
+  }
+  if (r.unconfirmed.length) {
+    h('Deliveries not confirmed yet');
+    table(['Sent', 'Route', 'Sent by'], r.unconfirmed.map(function (x) { return [nice_(x.date), x.from + ' → ' + x.to, x.sender]; }));
   }
   h('Sent to shops');
   table(['Shop', 'Units'], r.sent.map(function (x) { return [x.name, x.units]; }));
@@ -665,8 +807,8 @@ function reportEmail_(r) {
     table(['Place', 'Status'], r.counts.map(function (c) { return [c.name, c.done ? 'Done ' + nice_(c.date) : 'NOT DONE']; }));
     if (r.differences.length) {
       h('Count differences (shelf vs records)');
-      table(['Item', 'Place', 'Records', 'Counted', 'Difference', 'Value'], r.differences.map(function (d) {
-        return [d.name, d.place, d.before, d.after, (d.delta > 0 ? '+' : '') + d.delta, ksh_(d.value)]; }));
+      table(['Item · place', 'Records', 'Counted', '±', 'Value'], r.differences.map(function (d) {
+        return [shortName_(d.name) + ' · ' + d.place, d.before, d.after, (d.delta > 0 ? '+' : '') + d.delta, ksh_(d.value)]; }));
       html.push('<p style="margin:6px 0 0"><b>Missing stock value: ' + ksh_(-r.missingValue) + '</b></p>');
       lines.push('Missing stock value: ' + ksh_(-r.missingValue));
     } else {

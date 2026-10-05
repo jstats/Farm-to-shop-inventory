@@ -6,7 +6,8 @@
   if (typeof module === 'object' && module.exports) module.exports = factory();
   else root.Seed = factory();
 })(typeof self !== 'undefined' ? self : this, function () {
-  // [itemId, name, category, unit, price, reorderLevel, places]. places = where it is kept ('' = everywhere).
+  // [itemId, name, category, unit, price, reorderLevel, places, kgEach]. places = where it is kept ('' = everywhere);
+  // kgEach = kg of honey in one unit (honey only), so packing can be checked by weight.
   // From beelovefarm.org/shop/beekeeping (October 2026), plus farm produce, livestock and fish (prices to be set).
   var SHOPS = 'Kiunduani Shop, Nairobi Shop';
   var ALL = 'Farm, Kiunduani Shop, Nairobi Shop';
@@ -33,11 +34,11 @@
     ['cone-strainer', 'Cone Honey Strainer', 'Processing', 'piece', 900, 2, SHOPS],
     ['uncapping-fork', 'Uncapping Fork', 'Processing', 'piece', 700, 2, SHOPS],
     ['honey-bucket', 'Food-Grade Honey Bucket (20L)', 'Processing', 'bucket', 1200, 2, SHOPS],
-    ['honey-150g', 'Raw Organic Honey — 150g Jar', 'Honey', 'jar', 150, 20, ALL],
-    ['honey-300g', 'Raw Organic Honey — 300g Squeeze Bottle', 'Honey', 'bottle', 300, 10, ALL],
-    ['honey-500g', 'Raw Organic Honey — 500g Squeeze Bottle', 'Honey', 'bottle', 500, 10, ALL],
-    ['honey-1kg', 'Raw Organic Honey — 1kg Jar', 'Honey', 'jar', 1000, 10, ALL],
-    ['honey-bulk', 'Raw honey — bulk (per kg)', 'Honey', 'kg', 0, 0, 'Farm'],
+    ['honey-150g', 'Raw Organic Honey — 150g Jar', 'Honey', 'jar', 150, 20, ALL, 0.15],
+    ['honey-300g', 'Raw Organic Honey — 300g Squeeze Bottle', 'Honey', 'bottle', 300, 10, ALL, 0.3],
+    ['honey-500g', 'Raw Organic Honey — 500g Squeeze Bottle', 'Honey', 'bottle', 500, 10, ALL, 0.5],
+    ['honey-1kg', 'Raw Organic Honey — 1kg Jar', 'Honey', 'jar', 1000, 10, ALL, 1],
+    ['honey-bulk', 'Raw honey — bulk (per kg)', 'Honey', 'kg', 0, 0, 'Farm', 1],
     ['matoke', 'Matoke', 'Farm produce', 'bunch', 0, 0, 'Farm'],
     ['ripe-bananas', 'Ripe bananas', 'Farm produce', 'bunch', 0, 0, 'Farm'],
     ['rabbit', 'Rabbit', 'Livestock', 'head', 0, 0, 'Farm'],
@@ -64,7 +65,8 @@
 
   function items() {
     return ITEMS.map(function (r) {
-      return { id: r[0], name: r[1], category: r[2], unit: r[3], price: r[4], reorderLevel: r[5], active: true, places: placeIds(r[6]) };
+      return { id: r[0], name: r[1], category: r[2], unit: r[3], price: r[4], reorderLevel: r[5], active: true, places: placeIds(r[6]),
+               kgEach: r[7] || 0 };
     });
   }
   function locations() {
@@ -90,6 +92,7 @@
     var end = new Date(today + 'T00:00:00Z');
     var start = new Date(Date.UTC(end.getUTCFullYear(), end.getUTCMonth() - 3, 1));
     for (var d = new Date(start); d <= end; d.setUTCDate(d.getUTCDate() + 1)) {
+      var d2 = d;
       var date = d.toISOString().slice(0, 10);
       var dom = d.getUTCDate();
       if (dom === 1) {
@@ -103,10 +106,32 @@
           mv(date, 'restock', it.id, it.reorderLevel * 2 + 2 + rnd(3), '', 'kiunduani', 0, 'Daniel');
           mv(date, 'restock', it.id, it.reorderLevel * 2 + 1 + rnd(3), '', 'nairobi', 0, 'Otieno');
         });
-        its.filter(function (it) { return it.category === 'Honey' && it.places.length === 3; }).forEach(function (it) {
-          mv(date, 'restock', it.id, it.reorderLevel * 8 + rnd(5), '', 'farm', 0, 'Daniel');
-          mv(date, 'transfer', it.id, it.reorderLevel * 4 + 4, 'farm', 'kiunduani', 0, 'Daniel');
-          mv(date, 'transfer', it.id, it.reorderLevel * 3 + 4, 'farm', 'nairobi', 0, 'Daniel');
+        mv(date, 'restock', 'honey-bulk', 160 + rnd(20), '', 'farm', 0, 'Daniel');
+        // Pack bulk honey into jars and bottles, then deliver to both shops (confirmed the next day).
+        var jars = its.filter(function (it) { return it.category === 'Honey' && it.places.length === 3; });
+        var batch = 'demo-pack-' + date;
+        var packedKg = 0;
+        jars.forEach(function (it) {
+          var n2 = it.reorderLevel * 8 + rnd(5);
+          packedKg += n2 * it.kgEach;
+          mv(date, 'pack', it.id, n2, '', 'farm', 0, 'Daniel');
+          out[out.length - 1].batch = batch;
+        });
+        mv(date, 'pack', 'honey-bulk', Math.round(packedKg + 2), 'farm', '', 0, 'Daniel');
+        out[out.length - 1].batch = batch;
+        [['kiunduani', 4, 4, 'Kalondu'], ['nairobi', 3, 4, 'Otieno']].forEach(function (d) {
+          var b = 'demo-send-' + d[0] + '-' + date;
+          var next = new Date(Date.UTC(d2.getUTCFullYear(), d2.getUTCMonth(), d2.getUTCDate() + 1)).toISOString().slice(0, 10);
+          jars.forEach(function (it, j) {
+            var q = it.reorderLevel * d[1] + d[2];
+            mv(date, 'transfer', it.id, q, 'farm', d[0], 0, 'Daniel');
+            out[out.length - 1].batch = b;
+            if (next > today) return; // not confirmed yet: shows as a delivery waiting
+            var got = d[0] === 'kiunduani' && j === 0 ? q - 2 : q; // two jars short on one delivery
+            mv(next, 'receive', it.id, got, 'farm', d[0], 0, d[3]);
+            out[out.length - 1].batch = b;
+            out[out.length - 1].sent = q;
+          });
         });
       }
       if (d.getUTCDay() !== 0) {

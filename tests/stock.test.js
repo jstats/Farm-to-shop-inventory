@@ -109,3 +109,66 @@ test('countWindow: last 3 days of a month, then the first 3 of the next (late)',
   assert.equal(Stock.countedSince(ms, 'kiunduani', '2026-10-29'), false);
   assert.equal(Stock.countedSince(ms, 'nairobi', '2026-10-29'), true);
 });
+
+test('packing turns kg of bulk honey into jars', () => {
+  const r = Stock.replay([
+    mv('2026-10-01', 'restock', 'bulk', 50, '', 'farm'),
+    Object.assign(mv('2026-10-02', 'pack', 'bulk', 20, 'farm', ''), { batch: 'p1' }),
+    Object.assign(mv('2026-10-02', 'pack', 'jar1kg', 10, '', 'farm'), { batch: 'p1' }),
+    Object.assign(mv('2026-10-02', 'pack', 'jar150', 60, '', 'farm'), { batch: 'p1' }),
+  ]);
+  assert.equal(r.balance.bulk.farm, 30);
+  assert.equal(r.balance.jar1kg.farm, 10);
+  assert.equal(r.balance.jar150.farm, 60);
+});
+
+test('a delivery confirmed short takes the shortfall off the shop', () => {
+  const t = (id, qty) => Object.assign(mv('2026-10-03', 'transfer', id, qty, 'farm', 'kiunduani'), { batch: 'd1' });
+  const ms = [mv('2026-10-01', 'restock', 'jar', 100, '', 'farm'), t('jar', 50), t('hive', 2)];
+  assert.equal(Stock.pendingDeliveries(ms, ['kiunduani'], '2026-10-04').length, 1);
+  assert.equal(Stock.pendingDeliveries(ms, ['nairobi'], '2026-10-04').length, 0);
+  assert.equal(Stock.pendingDeliveries(ms, [], '2026-10-30').length, 0); // older than 14 days
+  ms.push(Object.assign(mv('2026-10-04', 'receive', 'jar', 48, 'farm', 'kiunduani'), { batch: 'd1', sent: 50 }));
+  ms.push(Object.assign(mv('2026-10-04', 'receive', 'hive', 2, 'farm', 'kiunduani'), { batch: 'd1', sent: 2 }));
+  assert.equal(Stock.pendingDeliveries(ms, ['kiunduani'], '2026-10-04').length, 0);
+  const b = Stock.replay(ms).balance;
+  assert.equal(b.jar.farm, 50);
+  assert.equal(b.jar.kiunduani, 48);
+});
+
+test('flow: start + in − out − sold − lost + count difference = end, and matches the balance', () => {
+  const ms = [
+    mv('2026-09-20', 'restock', 'jar', 40, '', 'farm'),
+    mv('2026-09-21', 'transfer', 'jar', 12, 'farm', 'kiunduani'),
+    Object.assign(mv('2026-10-02', 'pack', 'jar', 60, '', 'farm'), { batch: 'p' }),
+    Object.assign(mv('2026-10-03', 'transfer', 'jar', 50, 'farm', 'kiunduani'), { batch: 'd' }),
+    Object.assign(mv('2026-10-04', 'receive', 'jar', 49, 'farm', 'kiunduani'), { batch: 'd', sent: 50 }),
+    mv('2026-10-10', 'sale', 'jar', 45, 'kiunduani', '', 1000),
+    mv('2026-10-11', 'loss', 'jar', 1, 'kiunduani'),
+    mv('2026-10-30', 'count', 'jar', 12, '', 'kiunduani'),
+    mv('2026-11-02', 'sale', 'jar', 5, 'kiunduani', '', 1000), // after the month: not in October's flow
+  ];
+  const rows = Stock.flow(ms, ['jar'], ['farm', 'kiunduani'], '2026-10-01', '2026-10-31');
+  const k = rows.find((r) => r.place === 'kiunduani');
+  assert.deepEqual(k, { itemId: 'jar', place: 'kiunduani', start: 12, in: 50, out: 0, sold: 45, lost: 2, countDiff: -3, end: 12, packIn: 0, packOut: 0 });
+  const f = rows.find((r) => r.place === 'farm');
+  assert.deepEqual(f, { itemId: 'jar', place: 'farm', start: 28, in: 60, out: 50, sold: 0, lost: 0, countDiff: 0, end: 38, packIn: 60, packOut: 0 });
+  const bal = Stock.replay(ms.filter((m) => m.date <= '2026-10-31')).balance.jar;
+  assert.equal(k.end, bal.kiunduani);
+  assert.equal(f.end, bal.farm);
+});
+
+test('flowKg: packing is a change of container; what stays on the equipment is lost', () => {
+  const ms = [
+    mv('2026-10-01', 'restock', 'bulk', 50, '', 'farm'),
+    Object.assign(mv('2026-10-02', 'pack', 'bulk', 17, 'farm', ''), { batch: 'p' }),
+    Object.assign(mv('2026-10-02', 'pack', 'j1', 10, '', 'farm'), { batch: 'p' }),
+    Object.assign(mv('2026-10-02', 'pack', 'j150', 40, '', 'farm'), { batch: 'p' }),
+    mv('2026-10-03', 'transfer', 'j1', 8, 'farm', 'kiunduani'),
+  ];
+  const kg = { bulk: 1, j1: 1, j150: 0.15 };
+  const rows = Stock.flow(ms, ['bulk', 'j1', 'j150'], ['farm'], '2026-10-01', '2026-10-31');
+  const t = Stock.flowKg(rows, (id) => kg[id]);
+  assert.deepEqual(t, { start: 0, in: 50, out: 8, sold: 0, lost: 1, countDiff: 0, end: 41 });
+  assert.equal(t.start + t.in - t.out - t.sold - t.lost + t.countDiff, t.end);
+});
