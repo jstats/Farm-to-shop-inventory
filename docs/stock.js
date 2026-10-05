@@ -185,49 +185,6 @@
     return (b[itemId] && b[itemId][locationId]) || 0;
   }
 
-  // ---------- location check ----------
-  // A place with lat/lon only accepts entries made within its radius (default 200 m). Phone GPS can be off by
-  // tens of metres indoors, so up to 100 m of the reported accuracy is added as slack; a fix worse than
-  // MAX_ACCURACY_M is not trusted at all. backend/Code.gs applies the same rule (keep the numbers equal).
-  var DEFAULT_RADIUS_M = 200;
-  var MAX_SLACK_M = 100;
-  var MAX_ACCURACY_M = 500;
-
-  function distanceM(lat1, lon1, lat2, lon2) {
-    var R = 6371000, rad = Math.PI / 180;
-    var dLat = (lat2 - lat1) * rad, dLon = (lon2 - lon1) * rad;
-    var a = Math.sin(dLat / 2) * Math.sin(dLat / 2) +
-      Math.cos(lat1 * rad) * Math.cos(lat2 * rad) * Math.sin(dLon / 2) * Math.sin(dLon / 2);
-    return 2 * R * Math.asin(Math.min(1, Math.sqrt(a)));
-  }
-
-  function hasPoint(loc) {
-    return !!loc && loc.lat !== '' && loc.lat != null && loc.lon !== '' && loc.lon != null &&
-      isFinite(Number(loc.lat)) && isFinite(Number(loc.lon));
-  }
-
-  /**
-   * Is a phone at `pos` ({lat, lon, acc}) allowed to record for place `loc`?
-   * Returns { ok, checked, distance, radius, reason } where reason is 'no_gps', 'weak_gps' or 'too_far'.
-   */
-  function placeCheck(loc, pos) {
-    if (!hasPoint(loc)) return { ok: true, checked: false };
-    var radius = num(loc.radiusM) > 0 ? num(loc.radiusM) : DEFAULT_RADIUS_M;
-    if (!pos || !isFinite(Number(pos.lat)) || !isFinite(Number(pos.lon)) || pos.lat === '' || pos.lat == null) {
-      return { ok: false, checked: true, radius: radius, reason: 'no_gps' };
-    }
-    var acc = num(pos.acc);
-    if (acc > MAX_ACCURACY_M) return { ok: false, checked: true, radius: radius, reason: 'weak_gps' };
-    var d = distanceM(Number(loc.lat), Number(loc.lon), Number(pos.lat), Number(pos.lon));
-    var ok = d <= radius + Math.min(acc, MAX_SLACK_M);
-    return { ok: ok, checked: true, distance: d, radius: radius, reason: ok ? '' : 'too_far' };
-  }
-
-  /** The place a movement has to be recorded at: where the stock leaves from, or where it is counted / arrives. */
-  function checkPlace(m) {
-    return m.type === 'sale' || m.type === 'transfer' ? m.from : m.to;
-  }
-
   // ---------- reminders ----------
   /** True if any sale was recorded at `locationId` on `date`. */
   function soldOn(movements, locationId, date) {
@@ -267,7 +224,6 @@
     return movements.some(function (m) { return m.type === 'count' && m.to === locationId && m.date >= start; });
   }
 
-  return { TYPES: TYPES, replay: replay, soldOn: soldOn, daysLeftInMonth: daysLeftInMonth, countWindow: countWindow, countedSince: countedSince, summarise: summarise, onHand: onHand, monthsBack: monthsBack, sortMovements: sortMovements,
-           distanceM: distanceM, hasPoint: hasPoint, placeCheck: placeCheck, checkPlace: checkPlace,
-           DEFAULT_RADIUS_M: DEFAULT_RADIUS_M, MAX_ACCURACY_M: MAX_ACCURACY_M };
+  return { TYPES: TYPES, replay: replay, summarise: summarise, onHand: onHand, monthsBack: monthsBack, sortMovements: sortMovements,
+           soldOn: soldOn, daysLeftInMonth: daysLeftInMonth, countWindow: countWindow, countedSince: countedSince };
 });

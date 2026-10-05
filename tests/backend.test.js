@@ -64,15 +64,16 @@ function load() {
         return n.toISOString().slice(0, 10);
       },
     },
-    MailApp: { sendEmail: (to, subject, body) => mail.push({ to, subject, body }) },
+    MailApp: { sendEmail: (to, subject, body) => mail.push(typeof to === 'object' ? to : { to, subject, body }) },
+    Session: { getEffectiveUser: () => ({ getEmail: () => 'owner@example.com' }) },
     Math, Date, JSON, String, Number, isFinite, Object, Array,
   };
   vm.createContext(ctx);
   vm.runInContext(fs.readFileSync(path.join(__dirname, '../backend/Code.gs'), 'utf8'), ctx);
   ctx.setup();
-  sheets.workers.rows[1] = ['Mwende Musyoka', '0427', 'yes', 'manager'];
-  sheets.workers.rows[2] = ['Otieno', '1111', 'no', ''];
-  sheets.workers.rows[3] = ['Kalondu', '2222', 'yes', ''];
+  sheets.workers.rows[1] = ['Mwende Musyoka', '0427', 'yes', '', ''];
+  sheets.workers.rows[2] = ['Otieno', '1111', 'no', '', ''];
+  sheets.workers.rows[3] = ['Kalondu', '2222', 'yes', '', ''];
   const post = (body) => ctx.doPost({ postData: { contents: JSON.stringify(body) } });
   return { ctx, sheets, post, mail };
 }
@@ -136,70 +137,8 @@ test('save rejects unknown items, places, types and bad numbers', () => {
   assert.deepEqual(r.saved, ['b6']);
 });
 
-// Kiunduani market, roughly. 0.001 degrees of latitude is about 111 m.
-const KIU = { lat: -1.7896, lon: 37.6231 };
 const kalondu = { name: 'Kalondu', pin: '2222' };
 const mwende = { name: 'Mwende Musyoka', pin: '0427' };
-
-test('a manager sets a place point; other workers cannot', () => {
-  const { post, sheets } = load();
-  assert.equal(post({ action: 'setPoint', ...kalondu, locationId: 'kiunduani', ...KIU, acc: 20 }).error, 'not_manager');
-  assert.equal(post({ action: 'setPoint', ...mwende, locationId: 'kiunduani', ...KIU, acc: 300 }).error, 'weak_gps');
-  assert.equal(post({ action: 'setPoint', ...mwende, locationId: 'mombasa', ...KIU, acc: 20 }).error, 'unknown_place');
-  assert.equal(post({ action: 'setPoint', ...mwende, locationId: 'kiunduani', ...KIU, acc: 20 }).ok, true);
-  const loc = post({ action: 'data', ...kalondu }).locations.find((l) => l.id === 'kiunduani');
-  assert.equal(loc.lat, KIU.lat);
-  assert.equal(loc.lon, KIU.lon);
-  assert.equal(post({ action: 'data', ...mwende }).role, 'manager');
-  assert.equal(sheets.locations.rows[0].join(','), 'locationId,name,role,lat,lon,radiusM');
-});
-
-test('entries for a place with a point must come from near it', () => {
-  const { post, sheets } = load();
-  post({ action: 'setPoint', ...mwende, locationId: 'kiunduani', ...KIU, acc: 20 });
-  const at = (id, lat, lon, acc, extra = {}) => sale(id, Object.assign({ from: 'kiunduani', lat, lon, acc }, extra));
-  const r = post({ action: 'save', ...kalondu, movements: [
-    at('near', KIU.lat + 0.001, KIU.lon, 15),        // ~111 m: inside 200 m
-    at('far', KIU.lat + 0.01, KIU.lon, 15),          // ~1.1 km
-    at('weak', KIU.lat, KIU.lon, 900),               // fix too poor to trust
-    sale('nogps', { from: 'kiunduani' }),            // no position at all
-    at('slack', KIU.lat + 0.0025, KIU.lon, 80),      // ~278 m, but within 200 + 80 accuracy
-    sale('nairobi-anywhere', { from: 'nairobi' }),   // Nairobi has no point yet: allowed
-  ] });
-  assert.deepEqual(r.saved, ['near', 'slack', 'nairobi-anywhere']);
-  assert.deepEqual(r.rejected, ['far', 'weak', 'nogps']);
-  assert.deepEqual(JSON.parse(JSON.stringify(r.reasons)), { far: 'too_far', weak: 'weak_gps', nogps: 'no_gps' });
-  const head = sheets.movements.rows[0];
-  const near = Object.fromEntries(head.map((h, i) => [h, sheets.movements.rows[1][i]]));
-  assert.equal(near.distanceM, 111);
-  assert.equal(near.accuracyM, 15);
-});
-
-test('a counted place is checked at "to", a transfer at "from"', () => {
-  const { post } = load();
-  post({ action: 'setPoint', ...mwende, locationId: 'farm', ...KIU, acc: 20 });
-  const far = { lat: KIU.lat + 0.05, lon: KIU.lon, acc: 10 };
-  const r = post({ action: 'save', ...kalondu, movements: [
-    sale('t1', Object.assign({ type: 'transfer', from: 'farm', to: 'nairobi', price: 0 }, far)),   // sent from far away
-    sale('t2', Object.assign({ type: 'transfer', from: 'nairobi', to: 'farm', price: 0 }, far)),   // received at the farm: checked at Nairobi (no point)
-    sale('c1', Object.assign({ type: 'count', from: '', to: 'farm', price: 0 }, far)),
-  ] });
-  assert.deepEqual(r.rejected, ['t1', 'c1']);
-  assert.deepEqual(r.saved, ['t2']);
-});
-
-test('an older sheet gets the new columns without losing rows', () => {
-  const { ctx, sheets, post } = load();
-  // Simulate the first version: 3-column workers and no location columns on movements.
-  sheets.workers.rows.forEach((r) => r.splice(3));
-  sheets.workers.rows[0] = ['name', 'pin', 'active'];
-  sheets.movements.rows.splice(0, sheets.movements.rows.length, ['movementId', 'date', 'type', 'itemId', 'itemName', 'qty', 'unit', 'from', 'to', 'price', 'amount', 'worker', 'note', 'at', 'receivedAt']);
-  assert.deepEqual(post({ action: 'save', ...kalondu, movements: [sale('old1')] }).saved, ['old1']);
-  ctx.setup();
-  assert.equal(sheets.workers.rows[0].join(','), 'name,pin,active,role,email,place');
-  assert.equal(sheets.movements.rows[0].slice(-4).join(','), 'lat,lon,accuracyM,distanceM');
-  assert.equal(post({ action: 'data', ...kalondu }).movements[0].id, 'old1');
-});
 
 // Workers for reminder tests: Kalondu at Kiunduani, Otieno at Nairobi (by name), Mwende the manager.
 function withPlaces(env) {
@@ -208,23 +147,19 @@ function withPlaces(env) {
   const set = (row, h, v) => { w.rows[row][col(h)] = v; };
   set(1, 'email', 'mwende@example.com');
   set(3, 'email', 'kalondu@example.com'); set(3, 'place', 'kiunduani');
-  w.rows[4] = ['Otieno Juma', '3333', 'yes', '', 'otieno@example.com', 'Nairobi Shop'];
+  w.rows[4] = ['Otieno Juma', '3333', 'yes', 'otieno@example.com', 'Nairobi Shop'];
   return env;
 }
 const nairobi = (iso) => new Date(new Date(iso + '+03:00').getTime());
 
-test('evening: each shop with no sales today emails its own workers; the manager gets a summary', () => {
+test('evening: each shop with no sales today emails its own workers, nobody else', () => {
   const env = withPlaces(load());
   env.post({ action: 'save', ...mwende, movements: [sale('k1', { from: 'kiunduani', date: '2026-10-05' })] });
   const sent = env.ctx.reminders_(nairobi('2026-10-05T18:02:00'));
-  assert.deepEqual(JSON.parse(JSON.stringify(sent)), [
-    { to: 'otieno@example.com', kind: 'sales', place: 'nairobi' },
-    { to: 'mwende@example.com', kind: 'summary' },
-  ]);
+  assert.deepEqual(JSON.parse(JSON.stringify(sent)), [{ to: 'otieno@example.com', kind: 'sales', place: 'nairobi' }]);
   assert.match(env.mail[0].subject, /Nairobi Shop/);
   assert.match(env.mail[0].body, /Hello Otieno,/);
   assert.match(env.mail[0].body, /https:\/\/jstats\.github\.io\/Farm-to-shop-inventory\//);
-  assert.match(env.mail[1].body, /Nairobi Shop: no sales recorded today \(reminded Otieno Juma\)/);
 });
 
 test('morning on an ordinary day sends nothing; before any use nothing at all', () => {
@@ -242,8 +177,7 @@ test('last day of the month: places not counted are reminded morning and evening
   ] });
   const morning = JSON.parse(JSON.stringify(env.ctx.reminders_(nairobi('2026-10-31T09:00:00'))));
   assert.deepEqual(morning.filter((x) => x.kind === 'count'), [{ to: 'kalondu@example.com', kind: 'count', place: 'kiunduani' }]);
-  const summary = env.mail.find((m) => m.to === 'mwende@example.com').body;
-  assert.match(summary, /Farm: October count not done \(nobody reminded: no worker with an email has this place\)/);
+  assert.equal(env.mail.some((m) => m.to === 'mwende@example.com'), false);
   assert.match(env.mail[0].subject, /October stock count at Kiunduani Shop/);
   // Not the last day → no count reminders.
   env.mail.length = 0;
@@ -253,7 +187,7 @@ test('last day of the month: places not counted are reminded morning and evening
 test('sign-in returns the worker\'s places by id or by name, several allowed', () => {
   const env = withPlaces(load());
   const w = env.sheets.workers;
-  w.rows[5] = ['Felix', '5555', 'yes', '', 'felix@example.com', 'Farm, kiunduani; Nowhere'];
+  w.rows[5] = ['Felix', '5555', 'yes', 'felix@example.com', 'Farm, kiunduani; Nowhere'];
   const places = (name, pin) => JSON.parse(JSON.stringify(env.post({ action: 'data', name, pin }).places));
   assert.deepEqual(places('Kalondu', '2222'), ['kiunduani']);
   assert.deepEqual(places('Otieno Juma', '3333'), ['nairobi']);
@@ -263,11 +197,80 @@ test('sign-in returns the worker\'s places by id or by name, several allowed', (
 
 test('a worker with several places is reminded for each of them', () => {
   const env = withPlaces(load());
-  env.sheets.workers.rows[5] = ['Felix', '5555', 'yes', '', 'felix@example.com', 'Farm, Kiunduani Shop'];
+  env.sheets.workers.rows[5] = ['Felix', '5555', 'yes', 'felix@example.com', 'Farm, Kiunduani Shop'];
   env.post({ action: 'save', ...mwende, movements: [sale('n1', { from: 'nairobi', date: '2026-10-31' })] });
   const sent = JSON.parse(JSON.stringify(env.ctx.reminders_(nairobi('2026-10-31T18:00:00'))));
   const felix = sent.filter((x) => x.to === 'felix@example.com').map((x) => x.kind + '@' + x.place).sort();
   assert.deepEqual(felix, ['count@farm', 'count@kiunduani', 'sales@kiunduani']);
   const kalondu = sent.filter((x) => x.to === 'kalondu@example.com').map((x) => x.kind + '@' + x.place).sort();
   assert.deepEqual(kalondu, ['count@kiunduani', 'sales@kiunduani']);
+});
+
+test('a sheet made by an earlier version (role and GPS columns) keeps working', () => {
+  const { ctx, sheets, post } = load();
+  sheets.workers.rows[0] = ['name', 'pin', 'active', 'role', 'email', 'place'];
+  sheets.workers.rows[3] = ['Kalondu', '2222', 'yes', 'manager', 'k@example.com', 'Kiunduani Shop'];
+  sheets.movements.rows[0] = sheets.movements.rows[0].concat(['lat', 'lon', 'accuracyM', 'distanceM']);
+  ctx.setup();
+  assert.equal(sheets.workers.rows[0].join(','), 'name,pin,active,role,email,place');
+  const r = post({ action: 'save', ...kalondu, movements: [sale('x1', { lat: 1, lon: 2, acc: 3 })] });
+  assert.deepEqual(r.saved, ['x1']);
+  assert.equal(sheets.movements.rows[1].slice(-4).join(''), '');  // no position stored
+  assert.deepEqual(JSON.parse(JSON.stringify(post({ action: 'data', ...kalondu }).places)), ['kiunduani']);
+});
+
+test('report periods: last Monday–Sunday, and the previous calendar month', () => {
+  const { ctx } = load();
+  const p = (x) => JSON.parse(JSON.stringify(x));
+  assert.deepEqual(p(ctx.weekBefore_('2026-10-05')), { start: '2026-09-28', end: '2026-10-04' }); // a Monday
+  assert.deepEqual(p(ctx.weekBefore_('2026-10-08')), { start: '2026-09-28', end: '2026-10-04' });
+  assert.deepEqual(p(ctx.monthBefore_('2026-11-04')), { start: '2026-10-01', end: '2026-10-31' });
+  assert.deepEqual(p(ctx.monthBefore_('2027-01-04')), { start: '2026-12-01', end: '2026-12-31' });
+});
+
+test('the report goes to the script owner only, with the right numbers', () => {
+  const env = withPlaces(load());
+  const day = (d, id, extra) => sale(id, Object.assign({ date: d }, extra));
+  env.post({ action: 'save', ...mwende, movements: [
+    day('2026-10-01', 'r1', { type: 'restock', from: '', to: 'farm', qty: 50, price: 0 }),
+    day('2026-10-01', 't1', { type: 'transfer', from: 'farm', to: 'kiunduani', qty: 20, price: 0 }),
+    day('2026-10-02', 's1', { from: 'kiunduani', qty: 3, price: 1800 }),
+    day('2026-10-03', 's2', { from: 'kiunduani', qty: 2, price: 1700 }),
+    day('2026-10-03', 's3', { from: 'nairobi', qty: 1, price: 1800 }),
+    day('2026-09-25', 's0', { from: 'kiunduani', qty: 1, price: 1800 }),   // previous week
+    day('2026-10-30', 'c1', { type: 'count', from: '', to: 'kiunduani', qty: 12, price: 0 }), // records say 20 - 6 sold = 14
+  ] });
+  const r = env.ctx.report_('week', { start: '2026-09-28', end: '2026-10-04' }, '2026-10-05');
+  assert.equal(r.total, 3 * 1800 + 2 * 1700 + 1800);
+  assert.equal(r.prevTotal, 1800);
+  assert.deepEqual(JSON.parse(JSON.stringify(r.byShop)), [
+    { name: 'Kiunduani Shop', amount: 8800, units: 5, daysWithSales: 2 },
+    { name: 'Nairobi Shop', amount: 1800, units: 1, daysWithSales: 1 },
+  ]);
+  assert.equal(r.restocked, 50);
+  assert.equal(r.sent[0].units, 20);
+  assert.deepEqual(JSON.parse(JSON.stringify(r.workers)), [{ name: 'Mwende Musyoka', entries: 5 }]);
+
+  const m = env.ctx.report_('month', { start: '2026-10-01', end: '2026-10-31' }, '2026-11-04');
+  assert.deepEqual(JSON.parse(JSON.stringify(m.counts.map((c) => [c.name, c.done]))), [['Farm', false], ['Kiunduani Shop', true], ['Nairobi Shop', false]]);
+  assert.equal(m.differences.length, 1);
+  assert.equal(m.differences[0].delta, -2);
+  assert.equal(m.missingValue, -2 * 1800);
+
+  env.mail.length = 0;
+  const res = env.ctx.sendReport_('month', { start: '2026-10-01', end: '2026-10-31' }, '2026-11-04');
+  assert.equal(env.mail.length, 1);
+  assert.equal(env.mail[0].to, 'owner@example.com');
+  assert.match(res.subject, /monthly report: October 2026 · KSh 10,600/);
+  assert.match(env.mail[0].htmlBody, /Missing stock value: KSh 3,600/);
+  assert.match(env.mail[0].body, /NOT DONE/);
+});
+
+test('backend replay matches the app\'s stock maths', () => {
+  const Stock = require('../docs/stock.js');
+  const { ctx } = load();
+  const moves = Seed.demoMovements('2026-10-05');
+  moves.push({ id: 'cX', date: '2026-10-02', type: 'count', itemId: 'honey-1kg', qty: 5, from: '', to: 'nairobi', price: 0, worker: 'x', at: '2026-10-02T09:00:00Z' });
+  const a = JSON.parse(JSON.stringify(ctx.replay_(moves).balance));
+  assert.deepEqual(a, Stock.replay(moves).balance);
 });

@@ -71,44 +71,6 @@
     return new Date(d + 'T00:00:00').toLocaleDateString('en-KE', { day: 'numeric', month: 'short' });
   }
 
-  // ---------- GPS (works without mobile data) ----------
-  /** Best fix within `ms`: resolves early once accuracy is good. Rejects with 'denied' or 'no_gps'. */
-  // Always a fresh reading: an earlier fix would let someone save after walking away.
-  function locate(ms) {
-    return new Promise(function (resolve, reject) {
-      if (!navigator.geolocation) return reject('no_gps');
-      var best = null;
-      var id = navigator.geolocation.watchPosition(function (p) {
-        var f = { lat: p.coords.latitude, lon: p.coords.longitude, acc: p.coords.accuracy, time: Date.now() };
-        if (!best || f.acc < best.acc) best = f;
-        if (best.acc <= 30) finish();
-      }, function (err) {
-        if (err.code === 1) { done = true; navigator.geolocation.clearWatch(id); clearTimeout(timer); reject('denied'); }
-      }, { enableHighAccuracy: true, maximumAge: 0, timeout: ms });
-      var done = false;
-      var timer = setTimeout(finish, ms);
-      function finish() {
-        if (done) return;
-        done = true;
-        navigator.geolocation.clearWatch(id);
-        clearTimeout(timer);
-        if (best) resolve(best); else reject('no_gps');
-      }
-    });
-  }
-
-  function distText(m) {
-    return m < 1000 ? Math.round(m) + ' m' : (m / 1000).toFixed(1) + ' km';
-  }
-
-  function placeError(reason, loc, check) {
-    if (reason === 'denied') return 'This app needs your location to save entries for ' + loc.name + '. Allow location for this site in your browser settings, then try again.';
-    if (reason === 'no_gps') return 'Could not find your location. Turn on Location (GPS) on your phone and try again.';
-    if (reason === 'weak_gps') return 'Your GPS signal is too weak. Step outside or near a window for a moment, then try again.';
-    if (reason === 'too_far') return 'You are ' + distText(check.distance) + ' from ' + loc.name + '. Entries for ' + loc.name + ' can only be saved there.';
-    return 'Location check failed.';
-  }
-
   function items() { return ((state.data && state.data.items) || []).filter(function (i) { return i.active !== false; }); }
   function allItems() { return (state.data && state.data.items) || []; }
   function locations() { return (state.data && state.data.locations) || []; }
@@ -452,7 +414,6 @@
       '<label class="field"><span>Date</span><input type="date" name="date" value="' + today() + '" max="' + today() + '" required></label>' +
       where +
       '<p class="muted small" style="margin:0">' + help + '</p>' +
-      '<p class="muted small" id="gps-note" style="margin:8px 0 0"></p>' +
       '</div>' +
       '<input type="search" id="filter" placeholder="Find an item…" aria-label="Find an item">' +
       list +
@@ -492,10 +453,6 @@
         }
       });
       $('#save-btn').textContent = n ? 'Save ' + n + ' item' + (n === 1 ? '' : 's') : 'Save';
-      var place = locations().filter(function (l) {
-        return l.id === Stock.checkPlace({ type: type, from: form.from ? form.from.value : '', to: form.to ? form.to.value : '' });
-      })[0];
-      $('#gps-note').textContent = place && Stock.hasPoint(place) ? '📍 You need to be at ' + place.name + ' to save this.' : '';
     }
     form.addEventListener('input', function (e) {
       if (e.target.id === 'filter') {
@@ -546,23 +503,7 @@
       var overs = form.querySelectorAll('.warn:not([hidden])').length;
       if (overs && !window.confirm(overs + ' item' + (overs === 1 ? ' is' : 's are') + ' more than the stock recorded. Save anyway?')) return;
 
-      var place = locations().filter(function (l) { return l.id === Stock.checkPlace({ type: type, from: from, to: to }); })[0];
-      if (!place || !Stock.hasPoint(place)) return commit(out);
-      var btn = $('#save-btn');
-      btn.disabled = true;
-      btn.textContent = 'Checking your location…';
-      err.textContent = '';
-      locate(15000).then(function (fix) {
-        var check = Stock.placeCheck(place, fix);
-        if (!check.ok) throw { reason: check.reason, check: check };
-        out.forEach(function (m) { m.lat = fix.lat; m.lon = fix.lon; m.acc = Math.round(fix.acc); });
-        commit(out);
-      }).catch(function (x) {
-        btn.disabled = false;
-        refresh();
-        err.textContent = placeError(x && x.reason ? x.reason : x, place, x && x.check);
-        err.scrollIntoView({ block: 'center' });
-      });
+      commit(out);
     });
 
     function commit(out) {
@@ -740,56 +681,14 @@
       '</div>' +
       (state.rejected.length ? '<h2>Refused by the sheet</h2><p class="muted small">These were not saved in the sheet. Tell the manager, then clear them.</p>' +
         '<ul class="list">' + state.rejected.map(function (m) {
-          var why = { too_far: 'saved away from the place', no_gps: 'no location', weak_gps: 'weak GPS', invalid: 'item or place no longer exists' }[m.reason] || 'refused';
+          var why = m.reason === 'invalid' ? 'item or place no longer exists' : 'refused';
           return movementLi(m).replace('</span></span>', ' · <b>' + esc(why) + '</b></span></span>');
         }).join('') + '</ul>' +
         '<div class="btn-row"><button class="btn secondary" data-act="clear-rejected">Clear this list</button></div>' : '') +
-      (state.profile.role === 'manager' ? placePoints() : '') +
       '<div class="btn-row">' +
       (DEMO ? '<button class="btn secondary" data-act="reset-demo">Reset demo data</button>' : '') +
       '<button class="btn secondary" data-act="signout">Sign out</button></div>' +
       '<p class="muted small" style="margin-top:16px">Tip: add this app to your home screen. On Android open the browser menu (⋮) and tap “Add to Home screen”. It works with no signal; entries are sent when signal comes back.</p>';
-  }
-
-  function placePoints() {
-    return '<h2>Place locations (managers)</h2>' +
-      '<p class="muted small">Stand inside a place and tap its button. After that, entries for that place can only be saved within ' +
-      Stock.DEFAULT_RADIUS_M + ' m of it. To change the distance, edit radiusM in the locations tab.</p>' +
-      '<ul class="list">' + locations().map(function (l) {
-        return '<li><span class="grow"><b>' + esc(l.name) + '</b><br><span class="muted small">' +
-          (Stock.hasPoint(l) ? '📍 Set · within ' + (l.radiusM || Stock.DEFAULT_RADIUS_M) + ' m' : 'Not set: entries allowed from anywhere') +
-          '</span></span><button class="btn secondary" style="width:auto;min-height:40px;padding:8px 12px" data-act="set-point" data-loc="' + esc(l.id) + '">I am here</button></li>';
-      }).join('') + '</ul><div class="err" id="point-err"></div>';
-  }
-
-  function setPoint(locId, btn) {
-    var loc = locations().filter(function (l) { return l.id === locId; })[0];
-    if (!loc || !window.confirm('Save your current position as the location of ' + loc.name + '? Only do this while you are inside ' + loc.name + '.')) return;
-    var err = $('#point-err');
-    btn.disabled = true;
-    btn.textContent = 'Finding you…';
-    locate(20000).then(function (fix) {
-      if (fix.acc > 100) throw 'weak_gps';
-      if (DEMO) return { ok: true, fix: fix };
-      if (!navigator.onLine) throw 'offline';
-      return api({ action: 'setPoint', locationId: locId, lat: fix.lat, lon: fix.lon, acc: fix.acc }).then(function (res) {
-        if (!res.ok) throw res.error;
-        return { ok: true, fix: fix };
-      });
-    }).then(function (r) {
-      loc.lat = Math.round(r.fix.lat * 1e6) / 1e6;
-      loc.lon = Math.round(r.fix.lon * 1e6) / 1e6;
-      save('data', state.data);
-      render();
-      sync();
-    }).catch(function (x) {
-      btn.disabled = false;
-      btn.textContent = 'I am here';
-      err.textContent = x === 'offline' ? 'You need signal to save a place location.'
-        : x === 'not_manager' ? 'Only managers can set place locations.'
-        : x === 'weak_gps' ? 'GPS is not accurate enough yet (needs 100 m or better). Wait a moment near a window and try again.'
-        : placeError(x, loc, null);
-    });
   }
 
   // ---------- events ----------
@@ -823,8 +722,6 @@
       state.view = null;
       state.tab = 'home';
       render();
-    } else if (act === 'set-point') {
-      setPoint(t.getAttribute('data-loc'), t);
     } else if (act === 'sync') {
       sync();
     } else if (act === 'signout' || act === 'resign') {

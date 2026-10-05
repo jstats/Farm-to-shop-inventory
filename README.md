@@ -19,20 +19,19 @@ Everything goes into a Google Sheet that you own.
 **No signal?** Workers record as normal. Entries wait on the phone ("3 waiting for signal" at the top) and
 are sent automatically when signal returns. Only the very first sign-in on a phone needs signal.
 
-**Only from the right place.** Once a manager has set a place's GPS point, entries for that place can only
-be saved within 200 m of it: sales and counts at that shop, transfers where the stock leaves, restocks where it
-arrives. GPS works without data, so this works offline too. Every entry stores where the phone was and how far
-it was from the place (`lat`, `lon`, `accuracyM`, `distanceM` in `movements`).
-
 **Reminders.** The app is the main reminder. When a worker opens it, a big card at the top says what is due,
 with one button straight to the right form, and a strip shows on every other screen until it is done:
 - **Record today's sales:** from 4pm, when their shop has nothing recorded that day.
 - **Count the stock today:** in the last 3 days of the month. If missed, "October count was missed" stays for the
   first 3 days of the next month. Only a count in that window counts as the month-end count.
 
-Workers see reminders for their own places (`place` in the workers tab, several allowed); managers see every place.
-Email is a backup: at 6pm (sales) and on the last day of the month (count), the sheet emails the workers concerned
-and sends managers one summary of who is behind.
+Workers see reminders for their own places (`place` in the workers tab, several allowed); anyone with no place sees every place.
+Email is a backup: at 6pm (sales) and on the last day of the month (count), the sheet emails the workers concerned.
+
+**Reports, to the owner only.** Every Monday morning a weekly report, and on the 4th of each month a monthly report
+(it waits for counts done on the 1st–3rd), are emailed to the Google account that owns the sheet, and nobody else:
+sales by shop, best sellers, stock moved, month-end counts and missing stock, low stock, and who recorded what.
+To see one now, run `sendTestReport` in Apps Script.
 
 Each worker signs in with **their name and a PIN**. The sheet records the signed-in name on every
 entry, so you can tell who did what. The worker's name comes from the sheet, never from the phone.
@@ -61,7 +60,6 @@ Workers see the change the next time their app refreshes.
 3. Choose the `setup` function and press **Run**, then approve the permissions.
    This creates the `items`, `locations`, `workers` and `movements` tabs and fills in the items and the three places.
 4. Open the `workers` tab. Add each worker with a PIN (4 or more digits), for example `Kalondu | 4821 | yes`.
-   Put `manager` in the `role` column for anyone allowed to set place locations.
    For reminders, fill in `email` and `place`: where they work, e.g. `Kiunduani Shop`. Someone who works in
    several places gets them all, separated by commas: `Farm, Kiunduani Shop`.
 5. Go to **Deploy → New deployment → Web app**. Set Execute as: **Me** and Who has access: **Anyone**. Then press Deploy.
@@ -73,23 +71,18 @@ Workers see the change the next time their app refreshes.
    The app will be at `https://jstats.github.io/Farm-to-shop-inventory/`.
 3. Send workers the link. On their phone they open it in Chrome, then tap ⋮ → **Add to Home screen**.
 
-### 3. Turn on reminders
+### 3. Turn on reminders and reports
 In Apps Script, pick `setupReminders` and press **Run** once (approve the email permission).
-To stop them: the ⏰ **Triggers** page in the left menu, delete the two `reminders` triggers.
+To stop them: the ⏰ **Triggers** page in the left menu, delete the `reminders`, `weeklyReport` and `monthlyReport` triggers.
 
-### 4. Set each place's location
-A manager signs in on their phone, goes to the farm, then each shop. At each place they open **Me → Place
-locations** and tap **I am here** while standing inside. Places that are not set accept entries from anywhere.
-To allow a bigger area (e.g. a large farm), type a distance in metres in `radiusM` in the `locations` tab.
-
-### 5. Day one: the opening count
+### 4. Day one: the opening count
 Before anything else, do a **Monthly count** at the farm, Kiunduani and Nairobi, with every item counted.
 That sets the starting stock. Until then the dashboard shows everything as "Out".
 
 ## Good to know
 
 - **Mistakes:** don't edit or delete rows in `movements`. If a number was wrong, the next count corrects the stock.
-  If a whole entry was wrong, a manager can delete that row in the sheet; the change shows on the next refresh.
+  If a whole entry was wrong, you can delete that row in the sheet; the change shows on the next refresh.
 - **New branch:** add a row to `locations` with role `shop`. It appears in every form and on the dashboard.
 - **Someone leaves:** set `active` to `no` in `workers`. Their old entries keep their name.
 - **Forgotten PIN:** change it in `workers`. After 5 wrong PINs, that name is locked for 15 minutes.
@@ -97,8 +90,6 @@ That sets the starting stock. Until then the dashboard shows everything as "Out"
 - **Updating the app:** after changing any file in `docs/`, bump `VERSION` in `docs/sw.js`, so phones pick up the new version.
   After changing `Code.gs`, paste the new code, run `setup` again (it adds any new columns and keeps your data), then
   **Deploy → Manage deployments → ✏️ Edit → Version: New version → Deploy**, so the URL stays the same.
-- **Location refused?** The app says why: location turned off, GPS too weak (step outside for a moment), or too far.
-  A manager can see each entry's distance in `movements`.
 
 ## Try it without the sheet
 

@@ -4,44 +4,36 @@
  * The sheet is the record. Workers' phones send stock movements here; the app's dashboard reads them back.
  *   items      – what we sell. Edit names, prices and reorder levels here; set active = no to hide an item.
  *   locations  – the farm and the shops (Kiunduani, Nairobi). Add a row with role = shop for a new branch.
- *                lat/lon = the place's GPS point (a manager sets it from the app); radiusM = how close a phone
- *                must be (default 200). A place with no lat/lon accepts entries from anywhere.
- *   workers    – who may sign in: name + PIN. Set active = no when someone leaves. role = manager may set
- *                places' GPS points from the app and gets the reminder summary. email + place decide who gets which
- *                reminder; place is where they work, several separated by commas (e.g. "Farm, Kiunduani Shop").
+ *   workers    – who may sign in: name + PIN. Set active = no when someone leaves. email + place decide who gets
+ *                which reminder; place is where they work, several separated by commas (e.g. "Farm, Kiunduani Shop").
  *   movements  – one row per captured movement. Never edit "movementId"; fix mistakes with a new count.
- *                lat/lon/accuracyM/distanceM = where the phone was when the entry was saved.
  *
  * Every request carries the worker's name and PIN. The worker recorded on a movement is the signed-in
  * worker, never a name the phone sends. After MAX_FAILS wrong PINs a name is locked for LOCK_MINUTES.
  *
- * Location check: an entry for a place with a GPS point is refused unless the phone was within radiusM of it
- * (plus up to MAX_SLACK_M of the phone's reported accuracy). Same rule as placeCheck in docs/stock.js.
- *
- * Reminders: run setupReminders() once. Every day at 18:00 each shop with no sales recorded that day emails its
- * workers; on the last day of the month (09:00 and 18:00) each place not yet counted that month emails its workers.
- * Managers get one summary of who was reminded. Nothing is sent before the first movement is recorded.
+ * Reminders and reports: run setupReminders() once. Every day at 18:00 each shop with no sales recorded that day
+ * emails its workers; on the last day of the month (09:00 and 18:00) each place not yet counted emails its workers.
+ * Every Monday 07:00 a weekly report, and on the 4th at 07:00 a monthly report (after late counts are in), go ONLY
+ * to the Google account that owns this script. Nothing is sent before the first movement is recorded.
  *
  * First time: run setup() once from the Apps Script editor, then Deploy → New deployment → Web app
  * (Execute as: Me, Who has access: Anyone). Put the web app URL in docs/config.js.
  */
 var MAX_FAILS = 5;
 var LOCK_MINUTES = 15;
-var DEFAULT_RADIUS_M = 200;
-var MAX_SLACK_M = 100;
-var MAX_ACCURACY_M = 500;
-var SET_POINT_MAX_ACCURACY_M = 100;  // a manager's fix must be at least this good to become a place's point
 var APP_URL = 'https://jstats.github.io/Farm-to-shop-inventory/';
 var TZ = 'Africa/Nairobi';
 var EVENING_HOUR = 18;  // daily sales reminder (and a second count reminder on the last day)
 var MORNING_HOUR = 9;   // first count reminder on the last day of the month
+var REPORT_HOUR = 7;    // weekly report on Mondays, monthly report on the REPORT_MONTH_DAY
+var REPORT_MONTH_DAY = 4;  // the month-end count may be done up to the 3rd, so the monthly report waits for it
 
 var TABS = {
   items:     ['itemId', 'name', 'category', 'unit', 'price', 'reorderLevel', 'active'],
-  locations: ['locationId', 'name', 'role', 'lat', 'lon', 'radiusM'],
-  workers:   ['name', 'pin', 'active', 'role', 'email', 'place'],
+  locations: ['locationId', 'name', 'role'],
+  workers:   ['name', 'pin', 'active', 'email', 'place'],
   movements: ['movementId', 'date', 'type', 'itemId', 'itemName', 'qty', 'unit', 'from', 'to', 'price', 'amount',
-              'worker', 'note', 'at', 'receivedAt', 'lat', 'lon', 'accuracyM', 'distanceM'],
+              'worker', 'note', 'at', 'receivedAt'],
 };
 
 // From the Beelove website shop page. reorderLevel = warn when a shop has this many or fewer.
@@ -87,7 +79,7 @@ function setup() {
   if (locs.getLastRow() === 1) locs.getRange(2, 1, SEED_LOCATIONS.length, 3).setValues(SEED_LOCATIONS);
   var workers = ss.getSheetByName('workers');
   if (workers.getLastRow() === 1) {
-    workers.appendRow(['Manager', String(1000 + Math.floor(Math.random() * 9000)), 'yes', 'manager']);
+    workers.appendRow(['Manager', String(1000 + Math.floor(Math.random() * 9000)), 'yes']);
   }
   // Keep PINs as text so a leading zero survives.
   workers.getRange('B:B').setNumberFormat('@');
@@ -116,30 +108,6 @@ function headers_(sh, cols) {
   return head;
 }
 
-function num_(v) {
-  return v === '' || v == null || !isFinite(Number(v)) ? null : Number(v);
-}
-
-function distanceM_(lat1, lon1, lat2, lon2) {
-  var R = 6371000, rad = Math.PI / 180;
-  var dLat = (lat2 - lat1) * rad, dLon = (lon2 - lon1) * rad;
-  var a = Math.sin(dLat / 2) * Math.sin(dLat / 2) +
-    Math.cos(lat1 * rad) * Math.cos(lat2 * rad) * Math.sin(dLon / 2) * Math.sin(dLon / 2);
-  return 2 * R * Math.asin(Math.min(1, Math.sqrt(a)));
-}
-
-/** Same rule as placeCheck in docs/stock.js. Returns { ok, distance, reason }. */
-function placeCheck_(loc, m) {
-  var plat = num_(loc && loc.lat), plon = num_(loc && loc.lon);
-  var lat = num_(m.lat), lon = num_(m.lon), acc = num_(m.acc) || 0;
-  var d = lat != null && lon != null && plat != null && plon != null ? distanceM_(plat, plon, lat, lon) : null;
-  if (plat == null || plon == null) return { ok: true, distance: d };
-  if (lat == null || lon == null) return { ok: false, distance: null, reason: 'no_gps' };
-  if (acc > MAX_ACCURACY_M) return { ok: false, distance: d, reason: 'weak_gps' };
-  var radius = num_(loc.radiusM) > 0 ? num_(loc.radiusM) : DEFAULT_RADIUS_M;
-  return d <= radius + Math.min(acc, MAX_SLACK_M) ? { ok: true, distance: d } : { ok: false, distance: d, reason: 'too_far' };
-}
-
 function rows_(name) {
   var sh = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(name);
   if (!sh || sh.getLastRow() < 2) return [];
@@ -161,7 +129,7 @@ function date_(v) {
   return String(v).slice(0, 10);
 }
 
-/** Returns the worker's name (as written in the sheet) and role, or { error }. */
+/** Returns the worker's name (as written in the sheet) and places, or { error }. */
 function signIn_(name, pin) {
   var key = 'fails:' + String(name || '').trim().toLowerCase();
   var cache = CacheService.getScriptCache();
@@ -175,7 +143,7 @@ function signIn_(name, pin) {
     return { error: 'wrong_pin' };
   }
   cache.remove(key);
-  return { name: String(w.name).trim(), role: String(w.role || '').trim().toLowerCase(), places: placeIds_(w.place) };
+  return { name: String(w.name).trim(), places: placeIds_(w.place) };
 }
 
 function data_() {
@@ -185,8 +153,7 @@ function data_() {
                price: Number(r.price) || 0, reorderLevel: Number(r.reorderLevel) || 0, active: yes_(r.active) };
     }),
     locations: rows_('locations').filter(function (r) { return r.locationId; }).map(function (r) {
-      return { id: String(r.locationId), name: String(r.name), role: String(r.role),
-               lat: num_(r.lat), lon: num_(r.lon), radiusM: num_(r.radiusM) };
+      return { id: String(r.locationId), name: String(r.name), role: String(r.role) };
     }),
     movements: rows_('movements').filter(function (r) { return r.movementId; }).map(function (r) {
       return { id: String(r.movementId), date: date_(r.date), type: String(r.type), itemId: String(r.itemId),
@@ -205,7 +172,6 @@ function doGet() {
  * Everything is a POST so the PIN never sits in a URL.
  *   {action: 'data', name, pin}                → items, locations and all movements
  *   {action: 'save', name, pin, movements: []} → appends new movements; safe to repeat (known movementIds are skipped)
- *   {action: 'setPoint', name, pin, locationId, lat, lon, acc} → managers only: sets a place's GPS point
  */
 function doPost(e) {
   var body;
@@ -216,11 +182,9 @@ function doPost(e) {
     var out = data_();
     out.ok = true;
     out.worker = who.name;
-    out.role = who.role;
     out.places = who.places;
     return json_(out);
   }
-  if (body.action === 'setPoint') return json_(setPoint_(who, body));
 
   var lock = LockService.getScriptLock();
   lock.waitLock(20000);
@@ -248,16 +212,11 @@ function doPost(e) {
       var ok = it && TYPES.indexOf(m.type) >= 0 && isFinite(qty) && qty >= 0 && /^\d{4}-\d{2}-\d{2}$/.test(m.date) &&
         (!m.from || locs[m.from]) && (!m.to || locs[m.to]);
       if (!ok) { rejected.push(id); reasons[id] = 'invalid'; return; }
-      var check = placeCheck_(locs[m.type === 'sale' || m.type === 'transfer' ? m.from : m.to], m);
-      if (!check.ok) { rejected.push(id); reasons[id] = check.reason; return; }
       var price = m.type === 'sale' ? Number(m.price) || 0 : '';
       var v = {
         movementId: id, date: m.date, type: m.type, itemId: m.itemId, itemName: it.name, qty: qty, unit: it.unit,
         from: m.from || '', to: m.to || '', price: price, amount: m.type === 'sale' ? qty * price : '', worker: who.name,
         note: String(m.note || '').slice(0, 500), at: m.at || '', receivedAt: now,
-        lat: num_(m.lat) == null ? '' : num_(m.lat), lon: num_(m.lon) == null ? '' : num_(m.lon),
-        accuracyM: num_(m.acc) == null ? '' : Math.round(num_(m.acc)),
-        distanceM: check.distance == null ? '' : Math.round(check.distance),
       };
       rows.push(head.map(function (h) { return v.hasOwnProperty(h) ? v[h] : ''; }));
       seen[id] = true;
@@ -274,35 +233,18 @@ function doPost(e) {
   }
 }
 
-/** A manager standing at a place saves the phone's position as that place's GPS point. */
-function setPoint_(who, body) {
-  if (who.role !== 'manager') return { ok: false, error: 'not_manager' };
-  var lat = num_(body.lat), lon = num_(body.lon), acc = num_(body.acc);
-  if (lat == null || lon == null || Math.abs(lat) > 90 || Math.abs(lon) > 180) return { ok: false, error: 'no_gps' };
-  if (acc == null || acc > SET_POINT_MAX_ACCURACY_M) return { ok: false, error: 'weak_gps' };
-  var sh = SpreadsheetApp.getActiveSpreadsheet().getSheetByName('locations');
-  var head = headers_(sh, TABS.locations);
-  var ids = sh.getLastRow() > 1 ? sh.getRange(2, 1, sh.getLastRow() - 1, 1).getValues() : [];
-  for (var i = 0; i < ids.length; i++) {
-    if (String(ids[i][0]) === String(body.locationId)) {
-      sh.getRange(i + 2, head.indexOf('lat') + 1).setValue(Math.round(lat * 1e6) / 1e6);
-      sh.getRange(i + 2, head.indexOf('lon') + 1).setValue(Math.round(lon * 1e6) / 1e6);
-      return { ok: true };
-    }
-  }
-  return { ok: false, error: 'unknown_place' };
-}
-
 // ---------- reminders ----------
 
-/** Run once from the editor: (re)creates the two daily reminder triggers. */
+/** Run once from the editor: (re)creates the reminder and report triggers. Safe to run again. */
 function setupReminders() {
   ScriptApp.getProjectTriggers().forEach(function (t) {
-    if (t.getHandlerFunction() === 'reminders') ScriptApp.deleteTrigger(t);
+    if (['reminders', 'weeklyReport', 'monthlyReport'].indexOf(t.getHandlerFunction()) >= 0) ScriptApp.deleteTrigger(t);
   });
   [MORNING_HOUR, EVENING_HOUR].forEach(function (h) {
     ScriptApp.newTrigger('reminders').timeBased().everyDays(1).atHour(h).nearMinute(0).inTimezone(TZ).create();
   });
+  ScriptApp.newTrigger('weeklyReport').timeBased().onWeekDay(ScriptApp.WeekDay.MONDAY).atHour(REPORT_HOUR).inTimezone(TZ).create();
+  ScriptApp.newTrigger('monthlyReport').timeBased().onMonthDay(REPORT_MONTH_DAY).atHour(REPORT_HOUR).inTimezone(TZ).create();
 }
 
 /** Trigger handler. */
@@ -330,7 +272,7 @@ function isLastDayOfMonth_(ymd) {
   return new Date(Date.UTC(p[0], p[1] - 1, p[2] + 1)).getUTCDate() === 1;
 }
 
-/** Works out what is outstanding at `now` and emails the people concerned. Returns what it sent (for tests/logs). */
+/** Works out what is outstanding at `now` and emails the workers concerned. Returns what it sent (for tests/logs). */
 function reminders_(now) {
   var today = Utilities.formatDate(now, TZ, 'yyyy-MM-dd');
   var hour = Number(Utilities.formatDate(now, TZ, 'H'));
@@ -344,8 +286,7 @@ function reminders_(now) {
   if (!moves.length) return [];  // not in use yet
   var locs = rows_('locations').filter(function (r) { return r.locationId; });
   var workers = rows_('workers').filter(function (w) { return yes_(w.active); }).map(function (w) {
-    return { name: String(w.name).trim(), email: String(w.email || '').trim(), role: String(w.role || '').trim().toLowerCase(),
-             places: placeIds_(w.place) };
+    return { name: String(w.name).trim(), email: String(w.email || '').trim(), places: placeIds_(w.place) };
   });
 
   var issues = [];
@@ -365,7 +306,6 @@ function reminders_(now) {
   if (!issues.length) return [];
 
   var sent = [];
-  var summary = [];
   issues.forEach(function (x) {
     var people = workers.filter(function (w) { return w.places.indexOf(String(x.place.locationId)) >= 0 && w.email; });
     var subject, body;
@@ -385,15 +325,237 @@ function reminders_(now) {
       MailApp.sendEmail(w.email, subject, body);
       sent.push({ to: w.email, kind: x.kind, place: String(x.place.locationId) });
     });
-    summary.push('• ' + x.place.name + ': ' + (x.kind === 'sales' ? 'no sales recorded today' : monthName + ' count not done') +
-      (people.length ? ' (reminded ' + people.map(function (w) { return w.name; }).join(', ') + ')'
-        : ' (nobody reminded: no worker with an email has this place)'));
-  });
-
-  workers.filter(function (w) { return w.role === 'manager' && w.email; }).forEach(function (m) {
-    MailApp.sendEmail(m.email, 'Beelove Stock: ' + issues.length + ' thing' + (issues.length === 1 ? '' : 's') + ' outstanding (' + dayName + ')',
-      'Hello ' + m.name.split(' ')[0] + ',\n\n' + summary.join('\n') + '\n\nDashboard: ' + APP_URL + '\n\nBeelove Stock');
-    sent.push({ to: m.email, kind: 'summary' });
   });
   return sent;
+}
+
+// ---------- reports (owner only) ----------
+
+/** Trigger handler: Monday morning, covers last Monday–Sunday. */
+function weeklyReport() {
+  var today = Utilities.formatDate(new Date(), TZ, 'yyyy-MM-dd');
+  return sendReport_('week', weekBefore_(today), today);
+}
+
+/** Trigger handler: on REPORT_MONTH_DAY, covers the whole previous month. */
+function monthlyReport() {
+  var today = Utilities.formatDate(new Date(), TZ, 'yyyy-MM-dd');
+  return sendReport_('month', monthBefore_(today), today);
+}
+
+function addDays_(ymd, n) {
+  var p = ymd.split('-').map(Number);
+  return new Date(Date.UTC(p[0], p[1] - 1, p[2] + n)).toISOString().slice(0, 10);
+}
+
+/** The Monday–Sunday week that ended before `today`. */
+function weekBefore_(today) {
+  var dow = (new Date(today + 'T00:00:00Z').getUTCDay() + 6) % 7;  // 0 = Monday
+  var end = addDays_(today, -dow - 1);
+  return { start: addDays_(end, -6), end: end };
+}
+
+/** The calendar month before `today`'s month. */
+function monthBefore_(today) {
+  var p = today.split('-').map(Number);
+  var first = new Date(Date.UTC(p[0], p[1] - 2, 1)).toISOString().slice(0, 10);
+  var last = new Date(Date.UTC(p[0], p[1] - 1, 0)).toISOString().slice(0, 10);
+  return { start: first, end: last };
+}
+
+function movements_() {
+  return rows_('movements').filter(function (r) { return r.movementId; }).map(function (r) {
+    return { id: String(r.movementId), date: date_(r.date), type: String(r.type), itemId: String(r.itemId), qty: Number(r.qty) || 0,
+             from: String(r.from || ''), to: String(r.to || ''), price: Number(r.price) || 0, worker: String(r.worker),
+             at: r.at instanceof Date ? r.at.toISOString() : String(r.at || '') };
+  });
+}
+
+/** Same maths as replay() in docs/stock.js (a test keeps them equal): balances, and the difference each count made. */
+function replay_(moves) {
+  var bal = {}, adjustments = [];
+  function get(i, l) { return (bal[i] && bal[i][l]) || 0; }
+  function add(i, l, q) { if (!l) return; if (!bal[i]) bal[i] = {}; bal[i][l] = get(i, l) + q; }
+  moves.slice().sort(function (a, b) {
+    if (a.date !== b.date) return a.date < b.date ? -1 : 1;
+    return a.at < b.at ? -1 : a.at > b.at ? 1 : 0;
+  }).forEach(function (m) {
+    if (m.type === 'restock') add(m.itemId, m.to, m.qty);
+    else if (m.type === 'transfer') { add(m.itemId, m.from, -m.qty); add(m.itemId, m.to, m.qty); }
+    else if (m.type === 'sale') add(m.itemId, m.from, -m.qty);
+    else if (m.type === 'count') {
+      var before = get(m.itemId, m.to);
+      add(m.itemId, m.to, m.qty - before);
+      adjustments.push({ movement: m, before: before, after: m.qty, delta: m.qty - before });
+    }
+  });
+  return { balance: bal, adjustments: adjustments };
+}
+
+/** Everything the report says about [period.start, period.end]. `asOf` = the day the report is made. */
+function report_(kind, period, asOf) {
+  var moves = movements_();
+  var items = {};
+  rows_('items').forEach(function (r) { items[String(r.itemId)] = r; });
+  var locs = rows_('locations').filter(function (r) { return r.locationId; });
+  var shops = locs.filter(function (l) { return String(l.role) === 'shop'; });
+  var days = Math.round((Date.parse(period.end) - Date.parse(period.start)) / 864e5) + 1;
+  var prev = { start: addDays_(period.start, -days), end: addDays_(period.start, -1) };
+  if (kind === 'month') prev = monthBefore_(period.start);
+  var inP = function (m, p) { return m.date >= p.start && m.date <= p.end; };
+  var amount = function (m) { return m.qty * m.price; };
+
+  var sales = moves.filter(function (m) { return m.type === 'sale' && inP(m, period); });
+  var prevSales = moves.filter(function (m) { return m.type === 'sale' && inP(m, prev); });
+  var total = sales.reduce(function (t, m) { return t + amount(m); }, 0);
+
+  var byShop = shops.map(function (l) {
+    var ss = sales.filter(function (m) { return m.from === String(l.locationId); });
+    var dayset = {};
+    ss.forEach(function (m) { dayset[m.date] = true; });
+    return { name: String(l.name), amount: ss.reduce(function (t, m) { return t + amount(m); }, 0),
+             units: ss.reduce(function (t, m) { return t + m.qty; }, 0), daysWithSales: Object.keys(dayset).length };
+  });
+
+  var topMap = {};
+  sales.forEach(function (m) {
+    var t = topMap[m.itemId] || (topMap[m.itemId] = { itemId: m.itemId, units: 0, amount: 0 });
+    t.units += m.qty;
+    t.amount += amount(m);
+  });
+  var top = Object.keys(topMap).map(function (k) { return topMap[k]; }).sort(function (a, b) { return b.amount - a.amount; }).slice(0, 5)
+    .map(function (t) { var it = items[t.itemId] || {}; return { name: String(it.name || t.itemId), unit: String(it.unit || ''), units: t.units, amount: t.amount }; });
+
+  var inPeriod = moves.filter(function (m) { return inP(m, period); });
+  var restocked = inPeriod.filter(function (m) { return m.type === 'restock'; }).reduce(function (t, m) { return t + m.qty; }, 0);
+  var sent = shops.map(function (l) {
+    return { name: String(l.name), units: inPeriod.filter(function (m) { return m.type === 'transfer' && m.to === String(l.locationId); })
+      .reduce(function (t, m) { return t + m.qty; }, 0) };
+  });
+  var byWorker = {};
+  inPeriod.forEach(function (m) { byWorker[m.worker] = (byWorker[m.worker] || 0) + 1; });
+  var workers = Object.keys(byWorker).sort().map(function (w) { return { name: w, entries: byWorker[w] }; });
+
+  var r = replay_(moves.filter(function (m) { return m.date <= asOf; }));
+  var low = [];
+  Object.keys(items).forEach(function (id) {
+    var it = items[id];
+    var level = Number(it.reorderLevel) || 0;
+    if (!level || !yes_(it.active)) return;
+    shops.forEach(function (l) {
+      var q = (r.balance[id] && r.balance[id][String(l.locationId)]) || 0;
+      if (q <= level) low.push({ name: String(it.name), place: String(l.name), qty: q });
+    });
+  });
+
+  var out = { kind: kind, period: period, total: total, units: sales.reduce(function (t, m) { return t + m.qty; }, 0),
+              prevTotal: prevSales.reduce(function (t, m) { return t + amount(m); }, 0), byShop: byShop, days: days,
+              top: top, restocked: restocked, sent: sent, workers: workers, low: low };
+
+  if (kind === 'month') {
+    // The month-end count window: last 3 days of the month to the 3rd of the next (same as countWindow in docs/stock.js).
+    var winStart = addDays_(period.end, -2), winEnd = addDays_(period.end, 3);
+    out.counts = locs.map(function (l) {
+      var c = moves.filter(function (m) { return m.type === 'count' && m.to === String(l.locationId) && m.date >= winStart && m.date <= winEnd; });
+      return { name: String(l.name), done: c.length > 0, date: c.length ? c[c.length - 1].date : '' };
+    });
+    out.differences = r.adjustments.filter(function (a) {
+      return a.movement.date >= winStart && a.movement.date <= winEnd && a.delta !== 0;
+    }).map(function (a) {
+      var it = items[a.movement.itemId] || {};
+      var place = locs.filter(function (l) { return String(l.locationId) === a.movement.to; })[0];
+      return { name: String(it.name || a.movement.itemId), place: place ? String(place.name) : a.movement.to, before: a.before,
+               after: a.after, delta: a.delta, value: a.delta * (Number(it.price) || 0), worker: a.movement.worker };
+    });
+    out.missingValue = out.differences.reduce(function (t, d) { return t + Math.min(0, d.value); }, 0);
+  }
+  return out;
+}
+
+function ksh_(n) {
+  return 'KSh ' + Math.round(n).toString().replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+}
+
+function nice_(ymd) {
+  var m = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+  var p = ymd.split('-').map(Number);
+  return p[2] + ' ' + m[p[1] - 1];
+}
+
+function esc_(s) {
+  return String(s).replace(/[&<>"]/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]; });
+}
+
+/** The report as an email: { subject, html, text }. */
+function reportEmail_(r) {
+  var months = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+  var label = r.kind === 'week' ? nice_(r.period.start) + ' – ' + nice_(r.period.end)
+    : months[Number(r.period.start.slice(5, 7)) - 1] + ' ' + r.period.start.slice(0, 4);
+  var change = r.prevTotal ? Math.round((r.total - r.prevTotal) / r.prevTotal * 100) : null;
+  var lines = [];
+  var html = [];
+  var td = 'style="padding:6px 10px;border-bottom:1px solid #e2e3da"';
+  var tdr = 'style="padding:6px 10px;border-bottom:1px solid #e2e3da;text-align:right;white-space:nowrap"';
+  function h(t) { html.push('<h3 style="margin:22px 0 6px;font-size:16px">' + esc_(t) + '</h3>'); lines.push('', t.toUpperCase()); }
+  function table(head, rows) {
+    html.push('<table style="border-collapse:collapse;width:100%;font-size:14px"><tr>' + head.map(function (x, i) {
+      return '<th ' + (i ? tdr : td) + '>' + esc_(x) + '</th>'; }).join('') + '</tr>' +
+      rows.map(function (row) { return '<tr>' + row.map(function (x, i) { return '<td ' + (i ? tdr : td) + '>' + esc_(x) + '</td>'; }).join('') + '</tr>'; }).join('') +
+      '</table>');
+    rows.forEach(function (row) { lines.push('- ' + row.join(' | ')); });
+  }
+
+  html.push('<div style="font-family:Arial,sans-serif;color:#1c1f1a;max-width:620px">');
+  html.push('<h2 style="margin:0 0 4px">Beelove ' + (r.kind === 'week' ? 'weekly' : 'monthly') + ' report</h2><div style="color:#565d52">' + esc_(label) + '</div>');
+  html.push('<p style="font-size:28px;font-weight:bold;margin:16px 0 0">' + ksh_(r.total) + '</p><div style="color:#565d52">sales · ' + r.units + ' units' +
+    (change === null ? '' : ' · ' + (change >= 0 ? '+' : '') + change + '% vs previous ' + r.kind) + '</div>');
+  lines.push('Beelove ' + (r.kind === 'week' ? 'weekly' : 'monthly') + ' report: ' + label, 'Sales: ' + ksh_(r.total) + ' (' + r.units + ' units)' +
+    (change === null ? '' : ', ' + (change >= 0 ? '+' : '') + change + '% vs previous ' + r.kind));
+
+  h('Sales by shop');
+  table(['Shop', 'Sales', 'Units', 'Days with sales'], r.byShop.map(function (b) { return [b.name, ksh_(b.amount), b.units, b.daysWithSales + ' of ' + r.days]; }));
+  if (r.top.length) {
+    h('Best sellers');
+    table(['Item', 'Sold', 'Sales'], r.top.map(function (t) { return [t.name, t.units + ' ' + t.unit, ksh_(t.amount)]; }));
+  }
+  h('Stock moved');
+  table(['', 'Units'], [['Restocked / harvested', r.restocked]].concat(r.sent.map(function (x) { return ['Sent to ' + x.name, x.units]; })));
+  if (r.counts) {
+    h('Month-end count');
+    table(['Place', 'Status'], r.counts.map(function (c) { return [c.name, c.done ? 'Done ' + nice_(c.date) : 'NOT DONE']; }));
+    if (r.differences.length) {
+      h('Count differences (shelf vs records)');
+      table(['Item', 'Place', 'Records', 'Counted', 'Difference', 'Value'], r.differences.map(function (d) {
+        return [d.name, d.place, d.before, d.after, (d.delta > 0 ? '+' : '') + d.delta, ksh_(d.value)]; }));
+      html.push('<p style="margin:6px 0 0"><b>Missing stock value: ' + ksh_(-r.missingValue) + '</b></p>');
+      lines.push('Missing stock value: ' + ksh_(-r.missingValue));
+    } else {
+      html.push('<p style="margin:6px 0 0">No differences: counted stock matched the records.</p>');
+    }
+  }
+  h('Low stock now');
+  if (r.low.length) table(['Item', 'Shop', 'Left'], r.low.map(function (l) { return [l.name, l.place, l.qty]; }));
+  else { html.push('<p style="margin:0">Nothing is at or below its reorder level.</p>'); lines.push('Nothing low.'); }
+  h('Who recorded');
+  if (r.workers.length) table(['Worker', 'Entries'], r.workers.map(function (w) { return [w.name, w.entries]; }));
+  else { html.push('<p style="margin:0">Nobody recorded anything.</p>'); lines.push('Nobody recorded anything.'); }
+  html.push('<p style="margin-top:24px"><a href="' + APP_URL + '">Open the dashboard</a></p></div>');
+  lines.push('', 'Dashboard: ' + APP_URL);
+
+  return { subject: 'Beelove ' + (r.kind === 'week' ? 'weekly' : 'monthly') + ' report: ' + label + ' · ' + ksh_(r.total), html: html.join(''), text: lines.join('\n') };
+}
+
+/** Builds the report and emails it to the script owner only. Returns { to, subject } (or null if nothing to report). */
+function sendReport_(kind, period, asOf) {
+  if (!rows_('movements').some(function (r) { return r.movementId; })) return null;  // not in use yet
+  var to = Session.getEffectiveUser().getEmail();
+  if (!to) return null;
+  var mail = reportEmail_(report_(kind, period, asOf));
+  MailApp.sendEmail({ to: to, subject: mail.subject, body: mail.text, htmlBody: mail.html });
+  return { to: to, subject: mail.subject };
+}
+
+/** Run from the editor to see last week's report in your inbox now. */
+function sendTestReport() {
+  return weeklyReport();
 }
