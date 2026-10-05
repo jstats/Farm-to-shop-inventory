@@ -6,7 +6,7 @@
  * anything still waiting in the queue, so a worker always sees their own entries.
  */
 (function () {
-  var APP_VERSION = 12; // keep equal to VERSION in sw.js (a test checks)
+  var APP_VERSION = 13; // keep equal to VERSION in sw.js (a test checks)
   var CFG = window.BEELOVE_CONFIG || {};
   var DEMO = !CFG.apiUrl;
   var KEY = DEMO ? 'beelove-stock-demo:' : 'beelove-stock:';
@@ -628,7 +628,7 @@
   function packPlaces() {
     var bulk = bulkHoney();
     if (!bulk) return [];
-    var mine = myPlaces();
+    var mine = isManager() ? [] : myPlaces(); // managers can pack anywhere bulk honey is kept
     return locations().filter(function (l) { return Stock.kept(bulk, l.id) && (!mine.length || mine.indexOf(l.id) >= 0); });
   }
 
