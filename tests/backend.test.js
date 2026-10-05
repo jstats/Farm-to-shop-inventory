@@ -17,12 +17,22 @@ function fakeSheet(name) {
     setFrozenRows() {},
     getRange(a, col, nr, nc) {
       if (typeof a === 'string') return { setNumberFormat() {} };
-      return {
+      nr = nr || 1;
+      nc = nc || 1;
+      const range = {
         getValues: () => rows.slice(a - 1, a - 1 + nr).map((r) => Array.from({ length: nc }, (_, i) => (r[col - 1 + i] === undefined ? '' : r[col - 1 + i]))),
-        setValues: (vals) => vals.forEach((v, i) => { rows[a - 1 + i] = v.slice(); }),
-        setFontWeight() { return this; },
-        setNumberFormat() { return this; },
+        setValues: (vals) => {
+          vals.forEach((v, i) => {
+            const r = rows[a - 1 + i] || (rows[a - 1 + i] = []);
+            v.forEach((x, j) => { r[col - 1 + j] = x; });
+          });
+          return range;
+        },
+        setValue: (x) => range.setValues([[x]]),
+        setFontWeight: () => range,
+        setNumberFormat: () => range,
       };
+      return range;
     },
   };
   return sh;
@@ -48,8 +58,9 @@ function load() {
   vm.createContext(ctx);
   vm.runInContext(fs.readFileSync(path.join(__dirname, '../backend/Code.gs'), 'utf8'), ctx);
   ctx.setup();
-  sheets.workers.rows[1] = ['Mwende Musyoka', '0427', 'yes'];
-  sheets.workers.rows[2] = ['Otieno', '1111', 'no'];
+  sheets.workers.rows[1] = ['Mwende Musyoka', '0427', 'yes', 'manager'];
+  sheets.workers.rows[2] = ['Otieno', '1111', 'no', ''];
+  sheets.workers.rows[3] = ['Kalondu', '2222', 'yes', ''];
   const post = (body) => ctx.doPost({ postData: { contents: JSON.stringify(body) } });
   return { ctx, sheets, post };
 }
@@ -61,7 +72,7 @@ test('backend seed items and locations match the app seed', () => {
   // JSON round trip: arrays made inside the vm have a different prototype.
   const plain = (x) => JSON.parse(JSON.stringify(x));
   assert.deepEqual(plain(sheets.items.rows.slice(1).map((r) => r.slice(0, 6))), Seed.ITEMS);
-  assert.deepEqual(plain(sheets.locations.rows.slice(1)), Seed.LOCATIONS);
+  assert.deepEqual(plain(sheets.locations.rows.slice(1).map((r) => r.slice(0, 3))), Seed.LOCATIONS);
 });
 
 test('sign in is case-insensitive on name, exact on PIN; inactive workers are refused', () => {
@@ -111,4 +122,69 @@ test('save rejects unknown items, places, types and bad numbers', () => {
   ] });
   assert.deepEqual(r.rejected, ['b1', 'b2', 'b3', 'b4', 'b5']);
   assert.deepEqual(r.saved, ['b6']);
+});
+
+// Kiunduani market, roughly. 0.001 degrees of latitude is about 111 m.
+const KIU = { lat: -1.7896, lon: 37.6231 };
+const kalondu = { name: 'Kalondu', pin: '2222' };
+const mwende = { name: 'Mwende Musyoka', pin: '0427' };
+
+test('a manager sets a place point; other workers cannot', () => {
+  const { post, sheets } = load();
+  assert.equal(post({ action: 'setPoint', ...kalondu, locationId: 'kiunduani', ...KIU, acc: 20 }).error, 'not_manager');
+  assert.equal(post({ action: 'setPoint', ...mwende, locationId: 'kiunduani', ...KIU, acc: 300 }).error, 'weak_gps');
+  assert.equal(post({ action: 'setPoint', ...mwende, locationId: 'mombasa', ...KIU, acc: 20 }).error, 'unknown_place');
+  assert.equal(post({ action: 'setPoint', ...mwende, locationId: 'kiunduani', ...KIU, acc: 20 }).ok, true);
+  const loc = post({ action: 'data', ...kalondu }).locations.find((l) => l.id === 'kiunduani');
+  assert.equal(loc.lat, KIU.lat);
+  assert.equal(loc.lon, KIU.lon);
+  assert.equal(post({ action: 'data', ...mwende }).role, 'manager');
+  assert.equal(sheets.locations.rows[0].join(','), 'locationId,name,role,lat,lon,radiusM');
+});
+
+test('entries for a place with a point must come from near it', () => {
+  const { post, sheets } = load();
+  post({ action: 'setPoint', ...mwende, locationId: 'kiunduani', ...KIU, acc: 20 });
+  const at = (id, lat, lon, acc, extra = {}) => sale(id, Object.assign({ from: 'kiunduani', lat, lon, acc }, extra));
+  const r = post({ action: 'save', ...kalondu, movements: [
+    at('near', KIU.lat + 0.001, KIU.lon, 15),        // ~111 m: inside 200 m
+    at('far', KIU.lat + 0.01, KIU.lon, 15),          // ~1.1 km
+    at('weak', KIU.lat, KIU.lon, 900),               // fix too poor to trust
+    sale('nogps', { from: 'kiunduani' }),            // no position at all
+    at('slack', KIU.lat + 0.0025, KIU.lon, 80),      // ~278 m, but within 200 + 80 accuracy
+    sale('nairobi-anywhere', { from: 'nairobi' }),   // Nairobi has no point yet: allowed
+  ] });
+  assert.deepEqual(r.saved, ['near', 'slack', 'nairobi-anywhere']);
+  assert.deepEqual(r.rejected, ['far', 'weak', 'nogps']);
+  assert.deepEqual(JSON.parse(JSON.stringify(r.reasons)), { far: 'too_far', weak: 'weak_gps', nogps: 'no_gps' });
+  const head = sheets.movements.rows[0];
+  const near = Object.fromEntries(head.map((h, i) => [h, sheets.movements.rows[1][i]]));
+  assert.equal(near.distanceM, 111);
+  assert.equal(near.accuracyM, 15);
+});
+
+test('a counted place is checked at "to", a transfer at "from"', () => {
+  const { post } = load();
+  post({ action: 'setPoint', ...mwende, locationId: 'farm', ...KIU, acc: 20 });
+  const far = { lat: KIU.lat + 0.05, lon: KIU.lon, acc: 10 };
+  const r = post({ action: 'save', ...kalondu, movements: [
+    sale('t1', Object.assign({ type: 'transfer', from: 'farm', to: 'nairobi', price: 0 }, far)),   // sent from far away
+    sale('t2', Object.assign({ type: 'transfer', from: 'nairobi', to: 'farm', price: 0 }, far)),   // received at the farm: checked at Nairobi (no point)
+    sale('c1', Object.assign({ type: 'count', from: '', to: 'farm', price: 0 }, far)),
+  ] });
+  assert.deepEqual(r.rejected, ['t1', 'c1']);
+  assert.deepEqual(r.saved, ['t2']);
+});
+
+test('an older sheet gets the new columns without losing rows', () => {
+  const { ctx, sheets, post } = load();
+  // Simulate the first version: 3-column workers and no location columns on movements.
+  sheets.workers.rows.forEach((r) => r.splice(3));
+  sheets.workers.rows[0] = ['name', 'pin', 'active'];
+  sheets.movements.rows.splice(0, sheets.movements.rows.length, ['movementId', 'date', 'type', 'itemId', 'itemName', 'qty', 'unit', 'from', 'to', 'price', 'amount', 'worker', 'note', 'at', 'receivedAt']);
+  assert.deepEqual(post({ action: 'save', ...kalondu, movements: [sale('old1')] }).saved, ['old1']);
+  ctx.setup();
+  assert.equal(sheets.workers.rows[0].join(','), 'name,pin,active,role');
+  assert.equal(sheets.movements.rows[0].slice(-4).join(','), 'lat,lon,accuracyM,distanceM');
+  assert.equal(post({ action: 'data', ...kalondu }).movements[0].id, 'old1');
 });

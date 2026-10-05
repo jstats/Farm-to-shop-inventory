@@ -4,24 +4,35 @@
  * The sheet is the record. Workers' phones send stock movements here; the app's dashboard reads them back.
  *   items      – what we sell. Edit names, prices and reorder levels here; set active = no to hide an item.
  *   locations  – the farm and the shops (Kiunduani, Nairobi). Add a row with role = shop for a new branch.
- *   workers    – who may sign in: name + PIN. Set active = no when someone leaves.
+ *                lat/lon = the place's GPS point (a manager sets it from the app); radiusM = how close a phone
+ *                must be (default 200). A place with no lat/lon accepts entries from anywhere.
+ *   workers    – who may sign in: name + PIN. Set active = no when someone leaves. role = manager may set
+ *                places' GPS points from the app.
  *   movements  – one row per captured movement. Never edit "movementId"; fix mistakes with a new count.
+ *                lat/lon/accuracyM/distanceM = where the phone was when the entry was saved.
  *
  * Every request carries the worker's name and PIN. The worker recorded on a movement is the signed-in
  * worker, never a name the phone sends. After MAX_FAILS wrong PINs a name is locked for LOCK_MINUTES.
+ *
+ * Location check: an entry for a place with a GPS point is refused unless the phone was within radiusM of it
+ * (plus up to MAX_SLACK_M of the phone's reported accuracy). Same rule as placeCheck in docs/stock.js.
  *
  * First time: run setup() once from the Apps Script editor, then Deploy → New deployment → Web app
  * (Execute as: Me, Who has access: Anyone). Put the web app URL in docs/config.js.
  */
 var MAX_FAILS = 5;
 var LOCK_MINUTES = 15;
+var DEFAULT_RADIUS_M = 200;
+var MAX_SLACK_M = 100;
+var MAX_ACCURACY_M = 500;
+var SET_POINT_MAX_ACCURACY_M = 100;  // a manager's fix must be at least this good to become a place's point
 
 var TABS = {
   items:     ['itemId', 'name', 'category', 'unit', 'price', 'reorderLevel', 'active'],
-  locations: ['locationId', 'name', 'role'],
-  workers:   ['name', 'pin', 'active'],
+  locations: ['locationId', 'name', 'role', 'lat', 'lon', 'radiusM'],
+  workers:   ['name', 'pin', 'active', 'role'],
   movements: ['movementId', 'date', 'type', 'itemId', 'itemName', 'qty', 'unit', 'from', 'to', 'price', 'amount',
-              'worker', 'note', 'at', 'receivedAt'],
+              'worker', 'note', 'at', 'receivedAt', 'lat', 'lon', 'accuracyM', 'distanceM'],
 };
 
 // From the Beelove website shop page. reorderLevel = warn when a shop has this many or fewer.
@@ -50,17 +61,13 @@ var SEED_LOCATIONS = [
 ];
 var TYPES = ['restock', 'transfer', 'sale', 'count'];
 
-/** Run once from the editor. Safe to run again: it only adds missing tabs and never overwrites rows. */
+/** Run once from the editor. Safe to run again: it only adds missing tabs and columns, never overwrites rows. */
 function setup() {
   var ss = SpreadsheetApp.getActiveSpreadsheet();
   Object.keys(TABS).forEach(function (name) {
     var sh = ss.getSheetByName(name);
     if (!sh) sh = ss.insertSheet(name);
-    if (sh.getLastRow() === 0) {
-      sh.appendRow(TABS[name]);
-      sh.setFrozenRows(1);
-      sh.getRange(1, 1, 1, TABS[name].length).setFontWeight('bold');
-    }
+    headers_(sh, TABS[name]);
   });
   var items = ss.getSheetByName('items');
   if (items.getLastRow() === 1) {
@@ -71,7 +78,7 @@ function setup() {
   if (locs.getLastRow() === 1) locs.getRange(2, 1, SEED_LOCATIONS.length, 3).setValues(SEED_LOCATIONS);
   var workers = ss.getSheetByName('workers');
   if (workers.getLastRow() === 1) {
-    workers.appendRow(['Manager', String(1000 + Math.floor(Math.random() * 9000)), 'yes']);
+    workers.appendRow(['Manager', String(1000 + Math.floor(Math.random() * 9000)), 'yes', 'manager']);
   }
   // Keep PINs as text so a leading zero survives.
   workers.getRange('B:B').setNumberFormat('@');
@@ -81,6 +88,47 @@ function setup() {
 
 function json_(o) {
   return ContentService.createTextOutput(JSON.stringify(o)).setMimeType(ContentService.MimeType.JSON);
+}
+
+/** Makes sure row 1 holds every column in `cols` (adding missing ones at the end). Returns the header row. */
+function headers_(sh, cols) {
+  if (sh.getLastRow() === 0) {
+    sh.appendRow(cols);
+    sh.setFrozenRows(1);
+    sh.getRange(1, 1, 1, cols.length).setFontWeight('bold');
+    return cols.slice();
+  }
+  var head = sh.getRange(1, 1, 1, sh.getLastColumn()).getValues()[0].map(String);
+  var missing = cols.filter(function (c) { return head.indexOf(c) < 0; });
+  if (missing.length) {
+    sh.getRange(1, head.length + 1, 1, missing.length).setValues([missing]).setFontWeight('bold');
+    head = head.concat(missing);
+  }
+  return head;
+}
+
+function num_(v) {
+  return v === '' || v == null || !isFinite(Number(v)) ? null : Number(v);
+}
+
+function distanceM_(lat1, lon1, lat2, lon2) {
+  var R = 6371000, rad = Math.PI / 180;
+  var dLat = (lat2 - lat1) * rad, dLon = (lon2 - lon1) * rad;
+  var a = Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+    Math.cos(lat1 * rad) * Math.cos(lat2 * rad) * Math.sin(dLon / 2) * Math.sin(dLon / 2);
+  return 2 * R * Math.asin(Math.min(1, Math.sqrt(a)));
+}
+
+/** Same rule as placeCheck in docs/stock.js. Returns { ok, distance, reason }. */
+function placeCheck_(loc, m) {
+  var plat = num_(loc && loc.lat), plon = num_(loc && loc.lon);
+  var lat = num_(m.lat), lon = num_(m.lon), acc = num_(m.acc) || 0;
+  var d = lat != null && lon != null && plat != null && plon != null ? distanceM_(plat, plon, lat, lon) : null;
+  if (plat == null || plon == null) return { ok: true, distance: d };
+  if (lat == null || lon == null) return { ok: false, distance: null, reason: 'no_gps' };
+  if (acc > MAX_ACCURACY_M) return { ok: false, distance: d, reason: 'weak_gps' };
+  var radius = num_(loc.radiusM) > 0 ? num_(loc.radiusM) : DEFAULT_RADIUS_M;
+  return d <= radius + Math.min(acc, MAX_SLACK_M) ? { ok: true, distance: d } : { ok: false, distance: d, reason: 'too_far' };
 }
 
 function rows_(name) {
@@ -104,7 +152,7 @@ function date_(v) {
   return String(v).slice(0, 10);
 }
 
-/** Returns the worker's name as written in the sheet, or an error string. */
+/** Returns the worker's name (as written in the sheet) and role, or { error }. */
 function signIn_(name, pin) {
   var key = 'fails:' + String(name || '').trim().toLowerCase();
   var cache = CacheService.getScriptCache();
@@ -118,7 +166,7 @@ function signIn_(name, pin) {
     return { error: 'wrong_pin' };
   }
   cache.remove(key);
-  return { name: String(w.name).trim() };
+  return { name: String(w.name).trim(), role: String(w.role || '').trim().toLowerCase() };
 }
 
 function data_() {
@@ -128,7 +176,8 @@ function data_() {
                price: Number(r.price) || 0, reorderLevel: Number(r.reorderLevel) || 0, active: yes_(r.active) };
     }),
     locations: rows_('locations').filter(function (r) { return r.locationId; }).map(function (r) {
-      return { id: String(r.locationId), name: String(r.name), role: String(r.role) };
+      return { id: String(r.locationId), name: String(r.name), role: String(r.role),
+               lat: num_(r.lat), lon: num_(r.lon), radiusM: num_(r.radiusM) };
     }),
     movements: rows_('movements').filter(function (r) { return r.movementId; }).map(function (r) {
       return { id: String(r.movementId), date: date_(r.date), type: String(r.type), itemId: String(r.itemId),
@@ -147,6 +196,7 @@ function doGet() {
  * Everything is a POST so the PIN never sits in a URL.
  *   {action: 'data', name, pin}                → items, locations and all movements
  *   {action: 'save', name, pin, movements: []} → appends new movements; safe to repeat (known movementIds are skipped)
+ *   {action: 'setPoint', name, pin, locationId, lat, lon, acc} → managers only: sets a place's GPS point
  */
 function doPost(e) {
   var body;
@@ -157,14 +207,17 @@ function doPost(e) {
     var out = data_();
     out.ok = true;
     out.worker = who.name;
+    out.role = who.role;
     return json_(out);
   }
+  if (body.action === 'setPoint') return json_(setPoint_(who, body));
 
   var lock = LockService.getScriptLock();
   lock.waitLock(20000);
   try {
     var ss = SpreadsheetApp.getActiveSpreadsheet();
     var sh = ss.getSheetByName('movements');
+    var head = headers_(sh, TABS.movements);
     var seen = {};
     if (sh.getLastRow() > 1) {
       sh.getRange(2, 1, sh.getLastRow() - 1, 1).getValues().forEach(function (r) { seen[String(r[0])] = true; });
@@ -172,10 +225,10 @@ function doPost(e) {
     var items = {};
     rows_('items').forEach(function (r) { items[String(r.itemId)] = r; });
     var locs = {};
-    rows_('locations').forEach(function (r) { locs[String(r.locationId)] = true; });
+    rows_('locations').forEach(function (r) { locs[String(r.locationId)] = r; });
 
     var now = new Date();
-    var saved = [], rejected = [], rows = [];
+    var saved = [], rejected = [], reasons = {}, rows = [];
     (body.movements || []).forEach(function (m) {
       var id = String(m.id || '');
       if (!id) return;
@@ -184,20 +237,48 @@ function doPost(e) {
       var qty = Number(m.qty);
       var ok = it && TYPES.indexOf(m.type) >= 0 && isFinite(qty) && qty >= 0 && /^\d{4}-\d{2}-\d{2}$/.test(m.date) &&
         (!m.from || locs[m.from]) && (!m.to || locs[m.to]);
-      if (!ok) { rejected.push(id); return; }
+      if (!ok) { rejected.push(id); reasons[id] = 'invalid'; return; }
+      var check = placeCheck_(locs[m.type === 'sale' || m.type === 'transfer' ? m.from : m.to], m);
+      if (!check.ok) { rejected.push(id); reasons[id] = check.reason; return; }
       var price = m.type === 'sale' ? Number(m.price) || 0 : '';
-      rows.push([id, m.date, m.type, m.itemId, it.name, qty, it.unit, m.from || '', m.to || '', price,
-                 m.type === 'sale' ? qty * price : '', who.name, String(m.note || '').slice(0, 500), m.at || '', now]);
+      var v = {
+        movementId: id, date: m.date, type: m.type, itemId: m.itemId, itemName: it.name, qty: qty, unit: it.unit,
+        from: m.from || '', to: m.to || '', price: price, amount: m.type === 'sale' ? qty * price : '', worker: who.name,
+        note: String(m.note || '').slice(0, 500), at: m.at || '', receivedAt: now,
+        lat: num_(m.lat) == null ? '' : num_(m.lat), lon: num_(m.lon) == null ? '' : num_(m.lon),
+        accuracyM: num_(m.acc) == null ? '' : Math.round(num_(m.acc)),
+        distanceM: check.distance == null ? '' : Math.round(check.distance),
+      };
+      rows.push(head.map(function (h) { return v.hasOwnProperty(h) ? v[h] : ''; }));
       seen[id] = true;
       saved.push(id);
     });
     if (rows.length) {
       var start = sh.getLastRow() + 1;
       sh.getRange(start, 1, rows.length, rows[0].length).setValues(rows);
-      sh.getRange(start, 2, rows.length, 1).setNumberFormat('yyyy-mm-dd');
+      sh.getRange(start, head.indexOf('date') + 1, rows.length, 1).setNumberFormat('yyyy-mm-dd');
     }
-    return json_({ ok: true, saved: saved, rejected: rejected, worker: who.name });
+    return json_({ ok: true, saved: saved, rejected: rejected, reasons: reasons, worker: who.name });
   } finally {
     lock.releaseLock();
   }
+}
+
+/** A manager standing at a place saves the phone's position as that place's GPS point. */
+function setPoint_(who, body) {
+  if (who.role !== 'manager') return { ok: false, error: 'not_manager' };
+  var lat = num_(body.lat), lon = num_(body.lon), acc = num_(body.acc);
+  if (lat == null || lon == null || Math.abs(lat) > 90 || Math.abs(lon) > 180) return { ok: false, error: 'no_gps' };
+  if (acc == null || acc > SET_POINT_MAX_ACCURACY_M) return { ok: false, error: 'weak_gps' };
+  var sh = SpreadsheetApp.getActiveSpreadsheet().getSheetByName('locations');
+  var head = headers_(sh, TABS.locations);
+  var ids = sh.getLastRow() > 1 ? sh.getRange(2, 1, sh.getLastRow() - 1, 1).getValues() : [];
+  for (var i = 0; i < ids.length; i++) {
+    if (String(ids[i][0]) === String(body.locationId)) {
+      sh.getRange(i + 2, head.indexOf('lat') + 1).setValue(Math.round(lat * 1e6) / 1e6);
+      sh.getRange(i + 2, head.indexOf('lon') + 1).setValue(Math.round(lon * 1e6) / 1e6);
+      return { ok: true };
+    }
+  }
+  return { ok: false, error: 'unknown_place' };
 }

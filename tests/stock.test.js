@@ -85,3 +85,26 @@ test('negative stock is flagged, not hidden', () => {
   assert.equal(hive.per.kiunduani, -1);
   assert.equal(hive.negative, true);
 });
+
+test('placeCheck: radius, accuracy slack, weak or missing GPS, places without a point', () => {
+  const shop = { id: 'kiunduani', lat: -1.7896, lon: 37.6231 };
+  const at = (dLat, acc) => ({ lat: shop.lat + dLat, lon: shop.lon, acc });
+  assert.equal(Stock.placeCheck({ id: 'x' }, null).ok, true);
+  assert.equal(Stock.placeCheck({ id: 'x', lat: '', lon: '' }, null).checked, false);
+  assert.equal(Stock.placeCheck(shop, at(0.001, 10)).ok, true);
+  assert.equal(Math.round(Stock.placeCheck(shop, at(0.001, 10)).distance), 111);
+  assert.equal(Stock.placeCheck(shop, at(0.01, 10)).reason, 'too_far');
+  assert.equal(Stock.placeCheck(shop, at(0.0025, 80)).ok, true);   // 278 m <= 200 + 80
+  assert.equal(Stock.placeCheck(shop, at(0.0025, 20)).ok, false);  // 278 m >  200 + 20
+  assert.equal(Stock.placeCheck(shop, at(0.0035, 400)).ok, false); // slack is capped at 100 m
+  assert.equal(Stock.placeCheck(shop, at(0, 900)).reason, 'weak_gps');
+  assert.equal(Stock.placeCheck(shop, null).reason, 'no_gps');
+  assert.equal(Stock.placeCheck(Object.assign({ radiusM: 50 }, shop), at(0.001, 10)).ok, false);
+});
+
+test('checkPlace: sales and transfers at the source, counts and restocks where they land', () => {
+  assert.equal(Stock.checkPlace({ type: 'sale', from: 'a', to: '' }), 'a');
+  assert.equal(Stock.checkPlace({ type: 'transfer', from: 'a', to: 'b' }), 'a');
+  assert.equal(Stock.checkPlace({ type: 'count', from: '', to: 'b' }), 'b');
+  assert.equal(Stock.checkPlace({ type: 'restock', from: '', to: 'b' }), 'b');
+});
