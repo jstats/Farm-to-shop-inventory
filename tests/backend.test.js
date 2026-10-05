@@ -66,6 +66,7 @@ function load() {
     },
     MailApp: { sendEmail: (to, subject, body) => mail.push(typeof to === 'object' ? to : { to, subject, body }) },
     Session: { getEffectiveUser: () => ({ getEmail: () => 'owner@example.com' }) },
+    Logger: { log() {} },
     Math, Date, JSON, String, Number, isFinite, Object, Array,
   };
   vm.createContext(ctx);
@@ -116,7 +117,7 @@ test('save stamps the signed-in worker, works out the amount, and ignores repeat
   const row = Object.fromEntries(head.map((h, i) => [h, rows[0][i]]));
   assert.equal(row.worker, 'Mwende Musyoka');
   assert.equal(row.amount, 3400);
-  assert.equal(row.itemName, 'Raw Honey — 1kg Jar');
+  assert.equal(row.itemName, 'Raw Organic Honey — 1kg Jar');
 
   const data = post({ action: 'data', ...me });
   assert.equal(data.movements.length, 2);
@@ -257,14 +258,14 @@ test('the report goes to the script owner only, with the right numbers', () => {
   assert.deepEqual(JSON.parse(JSON.stringify(m.counts.map((c) => [c.name, c.done]))), [['Farm', false], ['Kiunduani Shop', true], ['Nairobi Shop', false]]);
   assert.equal(m.differences.length, 1);
   assert.equal(m.differences[0].delta, -2);
-  assert.equal(m.missingValue, -2 * 1800);
+  assert.equal(m.missingValue, -2 * 1000);
 
   env.mail.length = 0;
   const res = env.ctx.sendReport_('month', { start: '2026-10-01', end: '2026-10-31' }, '2026-11-04');
   assert.equal(env.mail.length, 1);
   assert.equal(env.mail[0].to, 'owner@example.com');
   assert.match(res.subject, /monthly report: October 2026 · KSh 10,600/);
-  assert.match(env.mail[0].htmlBody, /Missing stock value: KSh 3,600/);
+  assert.match(env.mail[0].htmlBody, /Missing stock value: KSh 2,000/);
   assert.match(env.mail[0].body, /NOT DONE/);
 });
 
@@ -280,19 +281,45 @@ test('backend replay matches the app\'s stock maths', () => {
 test('setup on an existing sheet adds the new items and fills places, keeping edits', () => {
   const { ctx, sheets } = load();
   const it = sheets.items;
-  // Simulate the first version: no places column, only the 16 shop items, one price changed by the owner.
+  // Simulate the first version: no places column, only some items, one price changed by the owner.
   it.rows.splice(17);
   it.rows.forEach((r) => r.splice(7));
-  it.rows[1][4] = 5000;
+  it.rows[1][4] = 5555;
   ctx.setup();
-  const h = it.rows[0];
-  assert.equal(h.join(','), 'itemId,name,category,unit,price,reorderLevel,active,places');
+  assert.equal(it.rows[0].join(','), 'itemId,name,category,unit,price,reorderLevel,active,places');
   assert.equal(it.rows.length - 1, Seed.ITEMS.length);
-  assert.equal(it.rows[1][4], 5000);
+  assert.equal(it.rows[1][4], 5555);  // setup never changes prices
   assert.equal(it.rows[1][7], 'Kiunduani Shop, Nairobi Shop');
   assert.equal(it.rows.find((r) => r[0] === 'dorper-sheep')[7], 'Farm');
   ctx.setup(); // again: nothing duplicated
   assert.equal(it.rows.length - 1, Seed.ITEMS.length);
+});
+
+test('applyWebsitePrices brings an old items tab up to the website list', () => {
+  const { ctx, sheets, post } = load();
+  const it = sheets.items;
+  // The first version's tab: old names and prices, the bee veil, a reorder level the owner changed,
+  // and an item the owner added by hand.
+  it.rows.splice(1);
+  it.rows.push(['ktbh-hive', 'KTBH — Kenya Top Bar Hive', 'Hives', 'hive', 4500, 7, 'yes', '']);
+  it.rows.push(['honey-1kg', 'Raw Honey — 1kg Jar', 'Honey', 'jar', 1800, 10, 'yes', '']);
+  it.rows.push(['bee-veil', 'Bee Veil (Round)', 'Protection', 'veil', 800, 5, 'yes', '']);
+  it.rows.push(['wax-block', 'Beeswax block', 'Other', 'kg', 900, 0, 'yes', 'Farm']);
+  const changed = ctx.applyWebsitePrices();
+  const row = (id) => Object.fromEntries(it.rows[0].map((h, i) => [h, it.rows.find((r) => r[0] === id)[i]]));
+  assert.equal(row('ktbh-hive').name, 'Kenya Top Bar Hive (KTBH)');
+  assert.equal(row('ktbh-hive').price, 4000);
+  assert.equal(row('ktbh-hive').reorderLevel, 7);           // owner's reorder level kept
+  assert.equal(row('honey-1kg').price, 1000);
+  assert.equal(row('honey-1kg').places, 'Farm, Kiunduani Shop, Nairobi Shop');
+  assert.equal(row('bee-veil').active, 'no');
+  assert.equal(row('wax-block').price, 900);                // own items untouched
+  assert.equal(row('honey-300g').price, 300);               // new ones added
+  assert.equal(it.rows.length - 1, Seed.ITEMS.length + 2);  // all listed items + veil + wax block
+  assert.ok(changed.includes('swarm-catcher (new)'));
+  assert.deepEqual(JSON.parse(JSON.stringify(ctx.applyWebsitePrices())), []); // second run: nothing to do
+  // The veil no longer appears as active in the app.
+  assert.equal(post({ action: 'data', ...mwende }).items.find((i) => i.id === 'bee-veil').active, false);
 });
 
 test('items come with their places; restocks keep own/bought, losses keep a reason', () => {
@@ -331,7 +358,7 @@ test('report: own vs bought, losses, and market sales from the farm', () => {
   ] });
   const r = env.ctx.report_('week', { start: '2026-09-28', end: '2026-10-04' }, '2026-10-05');
   assert.deepEqual(JSON.parse(JSON.stringify(r.incoming)), [
-    { name: 'Bulk Honey (per kg)', unit: 'kg', own: 25, bought: 40, spent: 37000, suppliers: 'Mutua, Wambua' },
+    { name: 'Raw honey — bulk (per kg)', unit: 'kg', own: 25, bought: 40, spent: 37000, suppliers: 'Mutua, Wambua' },
   ]);
   assert.deepEqual(JSON.parse(JSON.stringify(r.losses)), [{ name: 'Rabbit', unit: 'head', reason: 'died', qty: 2, value: 0 }]);
   assert.deepEqual(r.byShop.map((b) => b.name), ['Farm (market)', 'Kiunduani Shop', 'Nairobi Shop']);

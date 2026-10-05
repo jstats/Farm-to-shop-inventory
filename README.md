@@ -60,8 +60,11 @@ entry, so you can tell who did what. The worker's name comes from the sheet, nev
 
 ## Items
 
-The 16 beekeeping items come from the website's shop page, with the same names and prices; the
-**reorder levels are a first guess**. Matoke, ripe bananas, rabbits, Dorper sheep, tilapia and catfish
+The 26 beekeeping items come from beelovefarm.org/shop/beekeeping (October 2026), with the same names and prices;
+the **reorder levels are a first guess**. When the website's prices change, edit them in the `items` tab
+(or ask for the list in `backend/Code.gs` to be updated and run `applyWebsitePrices`, which updates names, prices
+and places, adds new items and switches off retired ones without touching history or items you added).
+"Raw honey — bulk (per kg)" is the honey harvested or bought in kg at the farm, before it is packed. Matoke, ripe bananas, rabbits, Dorper sheep, tilapia and catfish
 (fingerlings per piece, table fish per kg) start at **price 0**: workers type the price at each sale until you
 fill it in. Change anything in the `items` tab; add a row for a new item (give it a unique `itemId` and its `places`).
 To stop selling something set `active` to `no` (don't delete the row). Workers see changes on their next refresh.

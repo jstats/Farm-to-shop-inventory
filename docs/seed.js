@@ -7,25 +7,37 @@
   else root.Seed = factory();
 })(typeof self !== 'undefined' ? self : this, function () {
   // [itemId, name, category, unit, price, reorderLevel, places]. places = where it is kept ('' = everywhere).
+  // From beelovefarm.org/shop/beekeeping (October 2026), plus farm produce, livestock and fish (prices to be set).
   var SHOPS = 'Kiunduani Shop, Nairobi Shop';
   var ALL = 'Farm, Kiunduani Shop, Nairobi Shop';
   var ITEMS = [
-    ['ktbh-hive', 'KTBH — Kenya Top Bar Hive', 'Hives', 'hive', 4500, 2, SHOPS],
-    ['langstroth-hive', 'Langstroth Hive (10-frame)', 'Hives', 'hive', 7500, 2, SHOPS],
-    ['log-hive', 'Traditional Log Hive', 'Hives', 'hive', 1800, 2, SHOPS],
-    ['bee-suit', 'Full Bee Suit', 'Protection', 'suit', 3500, 3, SHOPS],
-    ['bee-veil', 'Bee Veil (Round)', 'Protection', 'veil', 800, 5, SHOPS],
-    ['bee-smoker', 'Bee Smoker', 'Tools', 'piece', 1200, 3, SHOPS],
-    ['hive-tool', 'Hive Tool (J-Type)', 'Tools', 'piece', 350, 5, SHOPS],
-    ['bee-brush', 'Bee Brush', 'Tools', 'piece', 300, 5, SHOPS],
-    ['bee-attractant', 'Bee Attractant', 'Tools', 'bottle', 500, 5, SHOPS],
-    ['foundation-sheet', 'Foundation Sheets', 'Tools', 'sheet', 150, 20, SHOPS],
-    ['frame-feeder', 'Frame Feeder', 'Tools', 'piece', 400, 5, SHOPS],
-    ['honey-extractor', 'Manual Honey Extractor', 'Processing', 'piece', 12000, 1, SHOPS],
-    ['honey-strainer', 'Honey Strainer (Double)', 'Processing', 'piece', 900, 2, SHOPS],
-    ['honey-150g', 'Raw Honey — 150g Jar', 'Honey', 'jar', 350, 20, ALL],
-    ['honey-1kg', 'Raw Honey — 1kg Jar', 'Honey', 'jar', 1800, 10, ALL],
-    ['honey-bulk', 'Bulk Honey (per kg)', 'Honey', 'kg', 1400, 20, ALL],
+    ['ktbh-hive', 'Kenya Top Bar Hive (KTBH)', 'Hives', 'hive', 4000, 2, SHOPS],
+    ['langstroth-hive', 'Langstroth Hive (10-frame)', 'Hives', 'hive', 5000, 2, SHOPS],
+    ['modern-log-hive', 'Modern Log Hive', 'Hives', 'hive', 3000, 2, SHOPS],
+    ['log-hive', 'Traditional Log Hive', 'Hives', 'hive', 2500, 2, SHOPS],
+    ['swarm-catcher', 'Swarm Catcher Box', 'Hives', 'box', 2200, 2, SHOPS],
+    ['bee-suit', 'Full Bee Suit', 'Protection', 'suit', 4000, 3, SHOPS],
+    ['bee-gloves', 'Beekeeping Gloves (Long Cuff)', 'Protection', 'pair', 950, 3, SHOPS],
+    ['bee-smoker', 'Bee Smoker', 'Tools', 'piece', 3500, 2, SHOPS],
+    ['hive-tool', 'Hive Tool (J-Type)', 'Tools', 'piece', 700, 3, SHOPS],
+    ['frame-grip', 'Frame Grip / Lifter', 'Tools', 'piece', 700, 2, SHOPS],
+    ['bee-brush', 'Bee Brush', 'Tools', 'piece', 700, 3, SHOPS],
+    ['bee-attractant', 'Bee Attractant (10ml)', 'Tools', 'bottle', 500, 5, SHOPS],
+    ['queen-excluder', 'Queen Excluder', 'Tools', 'piece', 800, 2, SHOPS],
+    ['propolis-mat', 'Propolis Collector Mat', 'Tools', 'piece', 800, 2, SHOPS],
+    ['foundation-sheet', 'Foundation Sheets', 'Tools', 'sheet', 180, 20, SHOPS],
+    ['frame-feeder', 'Bee Feeder', 'Tools', 'piece', 800, 3, SHOPS],
+    ['honey-extractor', 'Manual Honey Extractor (3/6 frame)', 'Processing', 'piece', 45000, 1, SHOPS],
+    ['refractometer', 'Honey Refractometer (ATC)', 'Processing', 'piece', 10000, 1, SHOPS],
+    ['honey-strainer', 'Double Stainless Sieve', 'Processing', 'set', 4000, 1, SHOPS],
+    ['cone-strainer', 'Cone Honey Strainer', 'Processing', 'piece', 900, 2, SHOPS],
+    ['uncapping-fork', 'Uncapping Fork', 'Processing', 'piece', 700, 2, SHOPS],
+    ['honey-bucket', 'Food-Grade Honey Bucket (20L)', 'Processing', 'bucket', 1200, 2, SHOPS],
+    ['honey-150g', 'Raw Organic Honey — 150g Jar', 'Honey', 'jar', 150, 20, ALL],
+    ['honey-300g', 'Raw Organic Honey — 300g Squeeze Bottle', 'Honey', 'bottle', 300, 10, ALL],
+    ['honey-500g', 'Raw Organic Honey — 500g Squeeze Bottle', 'Honey', 'bottle', 500, 10, ALL],
+    ['honey-1kg', 'Raw Organic Honey — 1kg Jar', 'Honey', 'jar', 1000, 10, ALL],
+    ['honey-bulk', 'Raw honey — bulk (per kg)', 'Honey', 'kg', 0, 0, 'Farm'],
     ['matoke', 'Matoke', 'Farm produce', 'bunch', 0, 0, 'Farm'],
     ['ripe-bananas', 'Ripe bananas', 'Farm produce', 'bunch', 0, 0, 'Farm'],
     ['rabbit', 'Rabbit', 'Livestock', 'head', 0, 0, 'Farm'],
@@ -35,6 +47,8 @@
     ['tilapia', 'Tilapia (table size)', 'Fish', 'kg', 0, 0, 'Farm'],
     ['catfish', 'Catfish (table size)', 'Fish', 'kg', 0, 0, 'Farm'],
   ];
+  // No longer sold (not on the website): kept in old sheets for history, switched off.
+  var RETIRED = ['bee-veil'];
   var LOCATIONS = [
     ['farm', 'Farm', 'farm'],
     ['kiunduani', 'Kiunduani Shop', 'shop'],
@@ -65,6 +79,7 @@
       return Math.floor((seed / 233280) * n);
     }
     var its = items();
+    var byId = function (id) { return its.filter(function (x) { return x.id === id; })[0]; };
     var out = [];
     var n = 0;
     function mv(date, type, itemId, qty, from, to, price, worker) {
@@ -83,20 +98,24 @@
         out[out.length - 1].supplier = 'Mutua (Kibwezi)';
         out[out.length - 1].cost = 900;
         mv(date, 'restock', 'matoke', 32 + rnd(10), '', 'farm', 0, 'Daniel');
-        its.filter(function (it) { return it.places.length === 3 || it.places.indexOf('farm') < 0; }).forEach(function (it) {
-          var f = it.category === 'Honey' ? 2 : 1;
-          mv(date, 'restock', it.id, it.reorderLevel * 3 * f + rnd(5), '', 'farm', 0, 'Mwende');
-          mv(date, 'transfer', it.id, it.reorderLevel * f + 2, 'farm', 'kiunduani', 0, 'Mwende');
-          mv(date, 'transfer', it.id, it.reorderLevel * f + 1, 'farm', 'nairobi', 0, 'Mwende');
+        // Shop equipment arrives at the shops (workshop or supplier); honey is packed at the farm and sent out.
+        its.filter(function (it) { return it.places.indexOf('farm') < 0; }).forEach(function (it) {
+          mv(date, 'restock', it.id, it.reorderLevel * 2 + 2 + rnd(3), '', 'kiunduani', 0, 'Daniel');
+          mv(date, 'restock', it.id, it.reorderLevel * 2 + 1 + rnd(3), '', 'nairobi', 0, 'Otieno');
+        });
+        its.filter(function (it) { return it.category === 'Honey' && it.places.length === 3; }).forEach(function (it) {
+          mv(date, 'restock', it.id, it.reorderLevel * 8 + rnd(5), '', 'farm', 0, 'Daniel');
+          mv(date, 'transfer', it.id, it.reorderLevel * 4 + 4, 'farm', 'kiunduani', 0, 'Daniel');
+          mv(date, 'transfer', it.id, it.reorderLevel * 3 + 4, 'farm', 'nairobi', 0, 'Daniel');
         });
       }
       if (d.getUTCDay() !== 0) {
         for (var k = 0; k < 3; k++) {
-          var it = its[13 + rnd(3)];
+          var it = byId(['honey-150g', 'honey-300g', 'honey-500g', 'honey-1kg'][rnd(4)]);
           if (rnd(3) === 0) it = its[rnd(its.length)];
-          if (it.places.indexOf('kiunduani') < 0) it = its[13];
+          if (it.places.indexOf('kiunduani') < 0) it = byId('honey-1kg');
           var shop = rnd(5) < 3 ? 'kiunduani' : 'nairobi';
-          mv(date, 'sale', it.id, 1 + rnd(it.unit === 'jar' ? 4 : 2), shop, '', it.price, shop === 'nairobi' ? 'Otieno' : 'Kalondu');
+          mv(date, 'sale', it.id, 1 + rnd(it.category === 'Honey' ? 4 : 2), shop, '', it.price, shop === 'nairobi' ? 'Otieno' : 'Kalondu');
         }
       }
       if (d.getUTCDay() === 3) mv(date, 'sale', 'matoke', 4 + rnd(4), 'farm', '', 700, 'Daniel');
@@ -108,5 +127,5 @@
     return out;
   }
 
-  return { ITEMS: ITEMS, LOCATIONS: LOCATIONS, items: items, locations: locations, demoMovements: demoMovements };
+  return { ITEMS: ITEMS, RETIRED: RETIRED, LOCATIONS: LOCATIONS, items: items, locations: locations, demoMovements: demoMovements };
 });
