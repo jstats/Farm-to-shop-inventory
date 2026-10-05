@@ -24,10 +24,15 @@ be saved within 200 m of it: sales and counts at that shop, transfers where the 
 arrives. GPS works without data, so this works offline too. Every entry stores where the phone was and how far
 it was from the place (`lat`, `lon`, `accuracyM`, `distanceM` in `movements`).
 
-**Reminders.** Every day at 6pm, each shop with no sales recorded that day emails its workers. On the last day
-of the month (9am and 6pm), each place not yet counted emails its workers. Managers get one email listing who was
-reminded. With Gmail on their phone, workers get a notification even if they never open the app. Inside the app,
-the same reminders show as yellow banners (sales from 4pm; the count in the last 3 days of the month).
+**Reminders.** The app is the main reminder. When a worker opens it, a big card at the top says what is due,
+with one button straight to the right form, and a strip shows on every other screen until it is done:
+- **Record today's sales:** from 4pm, when their shop has nothing recorded that day.
+- **Count the stock today:** in the last 3 days of the month. If missed, "October count was missed" stays for the
+  first 3 days of the next month. Only a count in that window counts as the month-end count.
+
+Workers see reminders for their own `place` (workers tab); managers see every place.
+Email is a backup: at 6pm (sales) and on the last day of the month (count), the sheet emails the workers concerned
+and sends managers one summary of who is behind.
 
 Each worker signs in with **their name and a PIN**. The sheet records the signed-in name on every
 entry, so you can tell who did what. The worker's name comes from the sheet, never from the phone.

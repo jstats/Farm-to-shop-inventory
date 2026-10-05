@@ -240,7 +240,34 @@
     return new Date(Date.UTC(p[0], p[1], 0)).getUTCDate() - p[2];
   }
 
-  return { TYPES: TYPES, replay: replay, soldOn: soldOn, daysLeftInMonth: daysLeftInMonth, summarise: summarise, onHand: onHand, monthsBack: monthsBack, sortMovements: sortMovements,
+  /**
+   * The month-end count window that `date` falls in: the last 3 days of a month and the first 3 of the next.
+   * Returns { month: 'YYYY-MM' being counted, start: first day of the window, late: true after the month ended },
+   * or null outside the window. A count dated on or after `start` covers that month.
+   * backend/Code.gs uses the same window for its emails.
+   */
+  function countWindow(date) {
+    var p = date.split('-').map(Number);
+    function win(y, m) { // m is 1-12
+      var last = new Date(Date.UTC(y, m, 0)).getUTCDate();
+      var ym = y + '-' + String(m).padStart(2, '0');
+      return { month: ym, start: ym + '-' + String(last - 2).padStart(2, '0') };
+    }
+    if (daysLeftInMonth(date) <= 2) { var w = win(p[0], p[1]); w.late = false; return w; }
+    if (p[2] <= 3) {
+      var prev = p[1] === 1 ? win(p[0] - 1, 12) : win(p[0], p[1] - 1);
+      prev.late = true;
+      return prev;
+    }
+    return null;
+  }
+
+  /** True if `locationId` has a count dated on or after `start`. */
+  function countedSince(movements, locationId, start) {
+    return movements.some(function (m) { return m.type === 'count' && m.to === locationId && m.date >= start; });
+  }
+
+  return { TYPES: TYPES, replay: replay, soldOn: soldOn, daysLeftInMonth: daysLeftInMonth, countWindow: countWindow, countedSince: countedSince, summarise: summarise, onHand: onHand, monthsBack: monthsBack, sortMovements: sortMovements,
            distanceM: distanceM, hasPoint: hasPoint, placeCheck: placeCheck, checkPlace: checkPlace,
            DEFAULT_RADIUS_M: DEFAULT_RADIUS_M, MAX_ACCURACY_M: MAX_ACCURACY_M };
 });

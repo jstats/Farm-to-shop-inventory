@@ -351,7 +351,9 @@ function reminders_(now) {
       if (!sold) issues.push({ place: l, kind: 'sales' });
     }
     if (lastDay) {
-      var counted = moves.some(function (m) { return m.type === 'count' && String(m.to) === id && date_(m.date).slice(0, 7) === month; });
+      // Done if counted in the last 3 days of the month (same window as countWindow in docs/stock.js).
+      var start = month + '-' + String(Number(today.slice(8, 10)) - 2).padStart(2, '0');
+      var counted = moves.some(function (m) { return m.type === 'count' && String(m.to) === id && date_(m.date) >= start; });
       if (!counted) issues.push({ place: l, kind: 'count' });
     }
   });

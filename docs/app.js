@@ -213,6 +213,11 @@
 
   function paintBanner() {
     var html = '';
+    var todo = state.profile && state.tab !== 'home' && !state.view ? reminders() : [];
+    if (todo.length) {
+      html += '<div class="banner remind-strip" role="alert">🔔 ' + esc(todo[0].title) +
+        (todo.length > 1 ? ' (+' + (todo.length - 1) + ' more)' : '') + ' · <button data-act="home">Do it now</button></div>';
+    }
     if (DEMO && state.profile) {
       html += '<div class="banner info">Demo mode: sample data, saved only on this phone. Connect the Google Sheet in config.js to go live.</div>';
     }
@@ -308,28 +313,60 @@
   }
 
   // ---------- home ----------
-  function renderHome(v) {
+  /**
+   * What this worker still has to do, newest rules first. Workers with a place in the sheet see their place only;
+   * everyone else (managers) sees every place.
+   *  - sales: from 4pm, a shop with nothing recorded today
+   *  - count: last 3 days of the month, and (marked late) the first 3 days of the next, until a count is made
+   */
+  function reminders() {
+    if (!state.profile || !state.data) return [];
     var mvts = movements();
-    var s = Stock.summarise({ items: allItems(), locations: locations(), movements: mvts }, today());
     var mine = state.profile.place;
-    // Count: in the last 3 days of the month, for the worker's own place (or every place if they have none).
-    var due = Stock.daysLeftInMonth(today()) <= 2
-      ? s.countDue.filter(function (id) { return !mine || id === mine; }).map(locName) : [];
-    // Sales: from 4pm, if the worker's shop has nothing recorded today.
-    var shop = locations().filter(function (l) { return l.id === mine && l.role === 'shop'; })[0];
-    var noSales = shop && new Date().getHours() >= 16 && !Stock.soldOn(mvts, shop.id, today());
+    var places = locations().filter(function (l) { return !mine || l.id === mine; });
+    var out = [];
+    var win = Stock.countWindow(today());
+    if (win) {
+      places.forEach(function (l) {
+        if (Stock.countedSince(mvts, l.id, win.start)) return;
+        var m = monthName(win.month, true).split(' ')[0];
+        out.push({ form: 'count', place: l.id, ico: '📋',
+          title: win.late ? m + ' count was missed' : 'Count the stock today',
+          text: win.late ? 'Count everything at ' + l.name + ' now and enter it.'
+            : 'It is the end of ' + m + '. Count everything at ' + l.name + ' and enter it.',
+          button: 'Start count' });
+      });
+    }
+    if (new Date().getHours() >= 16) {
+      places.filter(function (l) { return l.role === 'shop'; }).forEach(function (l) {
+        if (Stock.soldOn(mvts, l.id, today())) return;
+        out.push({ form: 'sale', place: l.id, ico: '🧾', title: 'Record today\'s sales',
+          text: 'No sales entered for ' + l.name + ' today. Enter what you sold before you close.', button: 'Record sales now' });
+      });
+    }
+    return out;
+  }
+
+  function reminderCards(list) {
+    return list.map(function (r) {
+      return '<div class="remind" role="alert"><div class="remind-head"><span class="remind-ico" aria-hidden="true">' + r.ico + '</span>' +
+        '<b>' + esc(r.title) + '</b></div><p>' + esc(r.text) + '</p>' +
+        '<button class="btn" data-form="' + r.form + '" data-place="' + esc(r.place) + '">' + esc(r.button) + ' →</button></div>';
+    }).join('');
+  }
+
+  function renderHome(v) {
+    var todo = reminders();
     var firstName = esc(state.profile.name.split(' ')[0]);
     v.innerHTML =
       '<h1>Hello, ' + firstName + '</h1>' +
-      '<p class="muted">What are you recording?</p>' +
-      (noSales ? '<div class="banner warn" style="width:100%;margin:12px 0 0">🧾 No sales recorded for ' + esc(shop.name) +
-        ' today. If anything was sold, record it before you close.</div>' : '') +
-      (due.length ? '<div class="banner warn" style="width:100%;margin:12px 0 0">📋 ' + esc(monthName(today().slice(0, 7), true)) +
-        ' count not done yet: ' + esc(due.join(', ')) + '.</div>' : '') +
+      reminderCards(todo) +
+      '<p class="muted">' + (todo.length ? 'Or record something else:' : 'What are you recording?') + '</p>' +
       '<div class="actions">' +
       Object.keys(TYPES).map(function (t) {
         var T = TYPES[t];
-        return '<button class="action' + ((t === 'count' && due.length) || (t === 'sale' && noSales) ? ' due' : '') + '" data-form="' + t + '">' +
+        var due = todo.some(function (r) { return r.form === t; });
+        return '<button class="action' + (due ? ' due' : '') + '" data-form="' + t + '">' +
           '<span class="ico" aria-hidden="true">' + T.ico + '</span><b>' + T.title + '</b><span>' + T.hint + '</span></button>';
       }).join('') +
       '</div>' +
@@ -367,7 +404,8 @@
     var T = TYPES[type];
     var f = farm() || {};
     var shopList = shops();
-    var lastShop = state.prefs.shop && shopList.some(function (s) { return s.id === state.prefs.shop; }) ? state.prefs.shop : (shopList[0] || {}).id;
+    var isShop = function (id) { return id && shopList.some(function (s) { return s.id === id; }); };
+    var lastShop = isShop(state.prefs.shop) ? state.prefs.shop : isShop(state.profile.place) ? state.profile.place : (shopList[0] || {}).id;
     var where = '';
     if (type === 'restock') {
       where = '<label class="field"><span>Where did the stock arrive?</span><select name="to">' + locOptions(locations(), f.id) + '</select></label>';
@@ -377,7 +415,8 @@
     } else if (type === 'sale') {
       where = '<label class="field"><span>Which shop?</span><select name="from">' + locOptions(shopList, lastShop) + '</select></label>';
     } else {
-      where = '<label class="field"><span>Where are you counting?</span><select name="to">' + locOptions(locations(), lastShop) + '</select></label>';
+      var countAt = locations().some(function (l) { return l.id === state.prefs.shop; }) ? state.prefs.shop : (state.profile.place || lastShop);
+      where = '<label class="field"><span>Where are you counting?</span><select name="to">' + locOptions(locations(), countAt) + '</select></label>';
     }
     var help = {
       restock: 'Enter how many arrived. Leave the rest empty.',
@@ -590,12 +629,23 @@
           lowSorted.slice(5).map(lowLi).join('') + '</ul></details>' : '')
       : '<p class="muted">✓ Every shop is above its reorder level.</p>');
 
-    var counts = '<h2>Monthly count</h2><ul class="list">' + locs.map(function (l) {
+    // The latest month-end window that has started: this month's from the 3rd-last day, otherwise last month's.
+    var win = Stock.countWindow(today());
+    if (!win) {
+      var d = new Date(today() + 'T00:00:00');
+      d.setDate(0); // last day of the previous month
+      win = Stock.countWindow(d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0'));
+      win.late = true;
+      win.closed = true;
+    }
+    var winMonth = monthName(win.month, true).split(' ')[0];
+    var counts = '<h2>Month-end count (' + esc(winMonth) + ')</h2><ul class="list">' + locs.map(function (l) {
       var last = s.lastCount[l.id];
-      var done = last && last.slice(0, 7) === ym;
+      var done = Stock.countedSince(movements(), l.id, win.start);
+      var pill = done ? '<span class="pill ok">✓ Done</span>'
+        : win.closed ? '<span class="pill bad">✗ Missed</span>' : '<span class="pill warn">⚠ ' + (win.late ? 'Late' : 'Due') + '</span>';
       return '<li><span class="grow"><b>' + esc(l.name) + '</b><br><span class="muted small">' +
-        (last ? 'Last counted ' + esc(niceDate(last)) : 'Never counted') + '</span></span>' +
-        '<span class="pill ' + (done ? 'ok' : 'warn') + '">' + (done ? '✓ Done' : '⚠ Due') + '</span></li>';
+        (last ? 'Last counted ' + esc(niceDate(last)) : 'Never counted') + '</span></span>' + pill + '</li>';
     }).join('') + '</ul>';
 
     var adj = s.adjustments.filter(function (a) { return a.movement.date.slice(0, 7) === ym && a.delta !== 0; });
@@ -745,6 +795,11 @@
     var act = t.getAttribute('data-act');
     var tab = t.getAttribute('data-tab');
     if (form) {
+      var place = t.getAttribute('data-place');
+      if (place) {
+        state.prefs.shop = place;
+        save('prefs', state.prefs);
+      }
       state.view = form;
       render();
       window.scrollTo(0, 0);

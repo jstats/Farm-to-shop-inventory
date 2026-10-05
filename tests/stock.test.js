@@ -118,3 +118,17 @@ test('reminder helpers: sales today and days left in the month', () => {
   assert.equal(Stock.daysLeftInMonth('2026-10-29'), 2);
   assert.equal(Stock.daysLeftInMonth('2028-02-28'), 1); // leap year
 });
+
+test('countWindow: last 3 days of a month, then the first 3 of the next (late)', () => {
+  assert.equal(Stock.countWindow('2026-10-20'), null);
+  assert.deepEqual(Stock.countWindow('2026-10-29'), { month: '2026-10', start: '2026-10-29', late: false });
+  assert.deepEqual(Stock.countWindow('2026-10-31'), { month: '2026-10', start: '2026-10-29', late: false });
+  assert.deepEqual(Stock.countWindow('2026-11-02'), { month: '2026-10', start: '2026-10-29', late: true });
+  assert.deepEqual(Stock.countWindow('2027-01-03'), { month: '2026-12', start: '2026-12-29', late: true });
+  assert.equal(Stock.countWindow('2026-11-04'), null);
+  assert.deepEqual(Stock.countWindow('2028-02-27'), { month: '2028-02', start: '2028-02-27', late: false });
+  const ms = [mv('2026-10-03', 'count', 'jar', 5, '', 'kiunduani'), mv('2026-10-30', 'count', 'jar', 5, '', 'nairobi')];
+  // An early-month count does not cover the month-end count.
+  assert.equal(Stock.countedSince(ms, 'kiunduani', '2026-10-29'), false);
+  assert.equal(Stock.countedSince(ms, 'nairobi', '2026-10-29'), true);
+});
