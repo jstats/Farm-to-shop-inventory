@@ -55,6 +55,10 @@ sales by shop and at the market, best sellers, new stock split into our own and 
 paid), stock sent to shops, losses with reasons, month-end counts and missing stock, low stock, and who recorded what.
 To see one now, run `sendTestReport` in Apps Script.
 
+**The dashboard is for managers only.** Put `manager` in the `role` column of the workers tab for yourself. Everyone
+else sees only *Record* and *Me*, and their phone only receives the entries of their own places (and their own
+entries), so business totals never reach it.
+
 Each worker signs in with **their name and a PIN**. The sheet records the signed-in name on every
 entry, so you can tell who did what. The worker's name comes from the sheet, never from the phone.
 

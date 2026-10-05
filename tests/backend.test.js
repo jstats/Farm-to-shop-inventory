@@ -72,7 +72,7 @@ function load() {
   vm.createContext(ctx);
   vm.runInContext(fs.readFileSync(path.join(__dirname, '../backend/Code.gs'), 'utf8'), ctx);
   ctx.setup();
-  sheets.workers.rows[1] = ['Mwende Musyoka', '0427', 'yes', '', ''];
+  sheets.workers.rows[1] = ['Mwende Musyoka', '0427', 'yes', '', '', 'manager'];
   sheets.workers.rows[2] = ['Otieno', '1111', 'no', '', ''];
   sheets.workers.rows[3] = ['Kalondu', '2222', 'yes', '', ''];
   const post = (body) => ctx.doPost({ postData: { contents: JSON.stringify(body) } });
@@ -437,4 +437,26 @@ test('backend flow matches the app\'s flow on demo data', () => {
     const rows = Stock.flow(moves, honey, [p], '2026-10-01', '2026-10-20');
     assert.deepEqual(JSON.parse(JSON.stringify(ctx.flowKg_(rows, (id) => kg[id]))), Stock.flowKg(rows, (id) => kg[id]));
   }
+});
+
+test('only managers receive every entry; workers get their places\' and their own', () => {
+  const env = withPlaces(load());
+  const m = (id, extra) => ({ id, date: '2026-10-05', price: 0, at: '2026-10-05T10:00:00Z', from: '', to: '', ...extra });
+  env.post({ action: 'save', ...mwende, movements: [
+    m('k', { type: 'sale', itemId: 'honey-1kg', qty: 1, from: 'kiunduani', price: 1000 }),
+    m('n', { type: 'sale', itemId: 'honey-1kg', qty: 1, from: 'nairobi', price: 1000 }),
+    m('t', { type: 'transfer', itemId: 'honey-1kg', qty: 5, from: 'farm', to: 'kiunduani', batch: 'B' }),
+    m('f', { type: 'restock', itemId: 'matoke', qty: 9, to: 'farm' }),
+  ] });
+  env.post({ action: 'save', name: 'Otieno Juma', pin: '3333', movements: [m('o', { type: 'loss', itemId: 'honey-1kg', qty: 1, from: 'kiunduani', reason: 'broken' })] });
+  const ids = (who) => env.post({ action: 'data', ...who }).movements.map((x) => x.id).sort().join(',');
+  const manager = env.post({ action: 'data', ...mwende });
+  assert.equal(manager.role, 'manager');
+  assert.equal(ids(mwende), 'f,k,n,o,t');
+  // Kalondu works at Kiunduani: Kiunduani's sale, the delivery to it, and Otieno's loss there; not Nairobi or the farm.
+  const kal = env.post({ action: 'data', name: 'Kalondu', pin: '2222' });
+  assert.equal(kal.role, '');
+  assert.equal(ids({ name: 'Kalondu', pin: '2222' }), 'k,o,t');
+  // Otieno works at Nairobi: Nairobi's sale, plus his own entry made at Kiunduani.
+  assert.equal(ids({ name: 'Otieno Juma', pin: '3333' }), 'n,o');
 });

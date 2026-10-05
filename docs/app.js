@@ -6,7 +6,7 @@
  * anything still waiting in the queue, so a worker always sees their own entries.
  */
 (function () {
-  var APP_VERSION = 11; // keep equal to VERSION in sw.js (a test checks)
+  var APP_VERSION = 12; // keep equal to VERSION in sw.js (a test checks)
   var CFG = window.BEELOVE_CONFIG || {};
   var DEMO = !CFG.apiUrl;
   var KEY = DEMO ? 'beelove-stock-demo:' : 'beelove-stock:';
@@ -151,8 +151,8 @@
       if (!res.ok) throw res;
       state.data = { items: res.items, locations: res.locations, movements: res.movements, fetchedAt: new Date().toISOString() };
       save('data', state.data);
-      if (state.profile.role !== res.role || JSON.stringify(state.profile.places) !== JSON.stringify(res.places || [])) {
-        state.profile.role = res.role;
+      if (state.profile.role !== (res.role || '') || JSON.stringify(state.profile.places) !== JSON.stringify(res.places || [])) {
+        state.profile.role = res.role || '';
         state.profile.places = res.places || [];
         save('profile', state.profile);
       }
@@ -201,9 +201,17 @@
     $('#banner').innerHTML = html;
   }
 
+  function isManager() {
+    return DEMO || (state.profile && state.profile.role === 'manager');
+  }
+
   function paintTabs() {
     var nav = $('#tabs');
     nav.hidden = !state.profile;
+    // Only managers have a dashboard; everyone else sees Record and Me.
+    var dash = nav.querySelector('[data-tab=dashboard]');
+    dash.hidden = !isManager();
+    nav.style.gridTemplateColumns = 'repeat(' + (isManager() ? 3 : 2) + ', 1fr)';
     Array.prototype.forEach.call(nav.querySelectorAll('button'), function (b) {
       b.classList.toggle('on', b.getAttribute('data-tab') === state.tab);
     });
@@ -219,7 +227,8 @@
     if (state.view === 'pack') return renderPack(v);
     if (state.view === 'receive') return renderReceive(v);
     if (state.view) return renderForm(v, state.view);
-    if (state.tab === 'dashboard') return renderDashboard(v);
+    if (state.tab === 'dashboard' && isManager()) return renderDashboard(v);
+    if (state.tab === 'dashboard') state.tab = 'home';
     if (state.tab === 'me') return renderMe(v);
     return renderHome(v);
   }
@@ -258,8 +267,8 @@
       api({ action: 'data' }).then(function (res) {
         if (!res.ok) throw res;
         state.profile.name = res.worker; // as spelled in the sheet
-        state.profile.role = res.role;
         state.profile.places = res.places || [];
+        state.profile.role = res.role || '';
         state.data = { items: res.items, locations: res.locations, movements: res.movements, fetchedAt: new Date().toISOString() };
         save('data', state.data);
         afterSignIn();
@@ -777,9 +786,9 @@
     v.innerHTML = '<div class="done"><div class="big">✅</div><h1>Saved</h1>' +
       '<p>' + T.verb + ': ' + s.count + ' item' + (s.count === 1 ? '' : 's') + (s.type === 'sale' ? ' · ' + ksh(s.amount) : '') + '</p>' +
       '<p class="muted">' + (DEMO ? 'Saved on this phone (demo).' : waiting ? 'Saved on this phone. It will be sent to the sheet when there is signal.' : 'Sent to the stock sheet.') + '</p>' +
-      '<div class="btn-row">' + (s.type === 'receive' ? '' : '<button class="btn" data-form="' + esc(s.type) + '">Record more ' + esc(T.title.toLowerCase()) + '</button>') +
+      '<div class="btn-row">' + (s.type === 'receive' ? '' : '<button class="btn" data-form="' + esc(s.type) + '">Record more</button>') +
       '<button class="btn secondary" data-act="home">Done</button>' +
-      '<button class="btn secondary" data-tab="dashboard">See dashboard</button></div></div>';
+      (isManager() ? '<button class="btn secondary" data-tab="dashboard">See dashboard</button>' : '') + '</div></div>';
   }
 
   // ---------- dashboard ----------

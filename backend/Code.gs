@@ -8,6 +8,8 @@
  *   locations  – the farm and the shops (Kiunduani, Nairobi). Add a row with role = shop for a new branch.
  *   workers    – who may sign in: name + PIN. Set active = no when someone leaves. email + place decide who gets
  *                which reminder; place is where they work, several separated by commas (e.g. "Farm, Kiunduani Shop").
+ *                role = manager sees the dashboard and everything; anyone else only receives the entries of their
+ *                own places (and their own entries), so business totals never reach their phone.
  *   movements  – one row per captured movement. Never edit "movementId"; fix mistakes with a new count.
  *                Restocks say source = own (harvest, workshop, born) or bought (supplier + cost per unit);
  *                losses say reason = spoilt / died / broken / stolen / other. Lines saved together share a batch:
@@ -37,7 +39,7 @@ var REPORT_MONTH_DAY = 4;  // the month-end count may be done up to the 3rd, so 
 var TABS = {
   items:     ['itemId', 'name', 'category', 'unit', 'price', 'reorderLevel', 'active', 'places', 'kgEach'],
   locations: ['locationId', 'name', 'role'],
-  workers:   ['name', 'pin', 'active', 'email', 'place'],
+  workers:   ['name', 'pin', 'active', 'email', 'place', 'role'],
   movements: ['movementId', 'date', 'type', 'itemId', 'itemName', 'qty', 'unit', 'from', 'to', 'price', 'amount',
               'worker', 'note', 'at', 'receivedAt', 'source', 'supplier', 'cost', 'reason', 'batch', 'sent'],
 };
@@ -237,7 +239,7 @@ function signIn_(name, pin) {
     return { error: 'wrong_pin' };
   }
   cache.remove(key);
-  return { name: String(w.name).trim(), places: placeIds_(w.place) };
+  return { name: String(w.name).trim(), places: placeIds_(w.place), manager: /^manager$/i.test(String(w.role || '').trim()) };
 }
 
 function data_() {
@@ -277,9 +279,16 @@ function doPost(e) {
   if (who.error) return json_({ ok: false, error: who.error });
   if (body.action === 'data') {
     var out = data_();
+    if (!who.manager) {
+      // Workers get what their screens need: their places' entries (stock on hand, deliveries, reminders) and their own.
+      out.movements = out.movements.filter(function (m) {
+        return m.worker === who.name || who.places.indexOf(m.from) >= 0 || who.places.indexOf(m.to) >= 0;
+      });
+    }
     out.ok = true;
     out.worker = who.name;
     out.places = who.places;
+    out.role = who.manager ? 'manager' : '';
     return json_(out);
   }
 
