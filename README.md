@@ -11,7 +11,7 @@ Everything goes into a Google Sheet that you own.
 
 | Button | When | What it does |
 |---|---|---|
-| 📦 Restock / harvest | New stock arrives | Adds to a place. Asks **Our own** (harvested, made in the workshop, born) or **Bought** (from whom, and the price paid for one) |
+| 📦 Restock / harvest | New stock arrives (hives from the workshop, equipment and empty jars from suppliers, bulk honey, produce) | Adds to a place. Honey is restocked only as **bulk kg**, split into *Our harvest* and *Bought from farmers* (farmer's name and price per kg). Jars and bottles never come from Restock: they come from *Pack honey* |
 | 🚚 Send stock | Stock leaves the farm for a shop (or between shops) | Takes from one place, adds to the other |
 | 🧾 Record sales | End of the day, or after each sale | Takes from a shop, or from the **Farm (market)** for produce, animals and fish sold at the market |
 | ⚠️ Record loss | Something spoilt, died, broke or was stolen | Takes from a place, with the reason |
@@ -24,10 +24,10 @@ hives and equipment `Kiunduani Shop, Nairobi Shop`, bananas, rabbits, sheep and 
 items kept at the chosen place, so the shop never sees sheep and the farm never sees bee suits.
 
 **Typical flows**
-- Honey we harvest: Restock *Raw honey — bulk (kg)* at Farm → *Our own*. Honey bought from farmers: the same → *Bought*,
-  with the farmer's name and price per kg. Then *Pack honey* into jars and bottles, *Send stock* to the shops,
-  and the shop confirms the delivery.
-- Hives from the workshop: Restock at Kiunduani Shop → *Our own*. Equipment from a supplier: Restock at the shop → *Bought*.
+- Honey: Restock *Raw honey — bulk (kg)* at Farm, typing *Our harvest* and/or *Bought from farmers* (with the farmer's
+  name and price per kg). Then *Pack honey* into jars and bottles, *Send stock* to the shops, and the shop confirms
+  the delivery. Stock sent from the farm is never restocked again at the shop: *Send stock* moves it.
+- Hives from the workshop and equipment from suppliers: Restock at the shop.
 - Matoke / ripe bananas: Restock at Farm when harvested → *Record sales* at *Farm (market)*. Rotten bunches → *Record loss*.
 - Rabbits, Dorper sheep, fish: Restock at Farm when born / stocked → *Record sales* at *Farm (market)*;
   deaths → *Record loss*; the monthly count is the headcount.
@@ -36,7 +36,7 @@ items kept at the chosen place, so the shop never sees sheep and the farm never 
 are sent automatically when signal returns. Only the very first sign-in on a phone needs signal.
 
 **Empty jars and bottles.** They are stock items too (category *Packaging*, kept at the Farm): record them with
-*Restock → Bought* (supplier and price per jar) and count them at the month-end count. *Pack honey* uses them up
+*Restock* and count them at the month-end count. *Pack honey* uses them up
 automatically (each honey item's `container` column says which empty it is filled into), and warns when more are filled
 than are in store. Empties bought − used − broken must match the count; a minus count difference means jars were filled
 and not recorded. The dashboard and monthly report show this as *Empty jars and bottles*, and low empties at the farm

@@ -183,7 +183,7 @@
         if (m.source === 'bought') {
           cur.bought += num(m.qty);
           cur.spent += num(m.qty) * num(m.cost);
-        } else cur.own += num(m.qty);
+        } else if (m.source === 'own') cur.own += num(m.qty);
       }
     });
     r.adjustments.forEach(function (a) {

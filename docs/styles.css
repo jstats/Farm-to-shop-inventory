@@ -207,3 +207,9 @@ table.flow th, table.flow td { padding: 7px 4px; }
 table.flow th:first-child, table.flow td:first-child { padding-left: 10px; }
 table.flow th:last-child, table.flow td:last-child { padding-right: 10px; }
 table.flow th { font-size: 0.66rem; letter-spacing: 0.02em; }
+
+/* Bulk honey in Restock: harvested and bought on one row */
+.item.bulk { grid-template-columns: 1fr; }
+.item.bulk .row2 { gap: 8px; }
+.item.bulk label { text-align: left; }
+.item.bulk input[name=supplier] { text-align: left; }

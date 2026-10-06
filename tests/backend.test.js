@@ -362,13 +362,13 @@ test('report: own vs bought, losses, and market sales from the farm', () => {
   ] });
   const r = env.ctx.report_('week', { start: '2026-09-28', end: '2026-10-04' }, '2026-10-05');
   assert.deepEqual(JSON.parse(JSON.stringify(r.incoming)), [
-    { name: 'Raw honey — bulk (per kg)', unit: 'kg', category: 'Honey', own: 25, bought: 40, spent: 37000, suppliers: 'Mutua, Wambua' },
+    { name: 'Raw honey — bulk (per kg)', unit: 'kg', category: 'Honey', own: 25, bought: 40, other: 0, spent: 37000, suppliers: 'Mutua, Wambua' },
   ]);
   assert.deepEqual(JSON.parse(JSON.stringify(r.losses)), [{ name: 'Rabbit', unit: 'head', reason: 'died', qty: 2, value: 0 }]);
   assert.deepEqual(r.byShop.map((b) => b.name), ['Farm (market)', 'Kiunduani Shop', 'Nairobi Shop']);
   assert.equal(r.byShop[0].amount, 3500);
   const mail = env.ctx.reportEmail_(r);
-  assert.match(mail.html, /Paid for bought stock: KSh 37,000/);
+  assert.match(mail.html, /Paid to farmers: KSh 37,000/);
   assert.match(mail.html, /Losses recorded/);
   // Farm items never show as low in a shop.
   assert.equal(r.low.some((l) => /Matoke|Rabbit/.test(l.name)), false);
@@ -498,4 +498,21 @@ test('empty jars running low at the farm are reported', () => {
   ] });
   const r = env.ctx.report_('week', { start: '2026-09-28', end: '2026-10-04' }, '2026-10-05');
   assert.ok(r.low.some((l) => l.name === 'Empty 1kg jar' && l.place === 'Farm' && l.qty === 12));
+});
+
+test('equipment restocks have no source; only bulk honey says harvest or bought', () => {
+  const env = withPlaces(load());
+  const r = env.post({ action: 'save', ...mwende, movements: [
+    sale('h1', { type: 'restock', itemId: 'ktbh-hive', qty: 5, from: '', to: 'kiunduani', price: 0 }),
+    sale('h2', { type: 'restock', itemId: 'honey-bulk', qty: 30, from: '', to: 'farm', price: 0, source: 'own' }),
+  ] });
+  assert.deepEqual(r.saved, ['h1', 'h2']);
+  const h = env.sheets.movements.rows[0];
+  const row = (n) => Object.fromEntries(h.map((k, i) => [k, env.sheets.movements.rows[n][i]]));
+  assert.equal(row(1).source, '');
+  assert.equal(row(2).source, 'own');
+  const rep = env.ctx.report_('week', { start: '2026-09-28', end: '2026-10-11' }, '2026-10-12');
+  const mail = env.ctx.reportEmail_(rep);
+  assert.match(mail.html, /Honey in: our harvest and bought from farmers/);
+  assert.match(mail.html, /Other stock restocked/);
 });

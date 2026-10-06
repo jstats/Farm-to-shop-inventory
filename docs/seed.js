@@ -116,6 +116,7 @@
           mv(date, 'restock', it.id, it.reorderLevel * 2 + 1 + rnd(3), '', 'nairobi', 0, 'Otieno');
         });
         mv(date, 'restock', 'honey-bulk', 160 + rnd(20), '', 'farm', 0, 'Daniel');
+        out[out.length - 1].source = 'own';
         // Pack bulk honey into jars and bottles, then deliver to both shops (confirmed the next day).
         var jars = its.filter(function (it) { return it.category === 'Honey' && it.places.length === 3; });
         var batch = 'demo-pack-' + date;
@@ -125,9 +126,6 @@
           packedKg += n2 * it.kgEach;
           // Buy the empty containers, then the packing uses them up.
           mv(date, 'restock', it.container[0], n2 + 10 + rnd(10), '', 'farm', 0, 'Daniel');
-          out[out.length - 1].source = 'bought';
-          out[out.length - 1].supplier = 'Kenpoly';
-          out[out.length - 1].cost = it.kgEach >= 1 ? 60 : 30;
           mv(date, 'pack', it.id, n2, '', 'farm', 0, 'Daniel');
           out[out.length - 1].batch = batch;
           mv(date, 'pack', it.container[0], n2, 'farm', '', 0, 'Daniel');

@@ -13,7 +13,8 @@
  *                role = manager sees the dashboard and everything; anyone else only receives the entries of their
  *                own places (and their own entries), so business totals never reach their phone.
  *   movements  – one row per captured movement. Never edit "movementId"; fix mistakes with a new count.
- *                Restocks say source = own (harvest, workshop, born) or bought (supplier + cost per unit);
+ *                Bulk honey restocks say source = own (our harvest) or bought (farmer + price per kg); other restocks
+ *                leave source empty;
  *                losses say reason = spoilt / died / broken / stolen / other. Lines saved together share a batch:
  *                a delivery (transfer) is confirmed by receive lines with the same batch (qty arrived of sent);
  *                a packing (pack) takes kg from bulk honey (from) and adds jars/bottles (to).
@@ -337,7 +338,7 @@ function doPost(e) {
         movementId: id, date: m.date, type: m.type, itemId: m.itemId, itemName: it.name, qty: qty, unit: it.unit,
         from: m.from || '', to: m.to || '', price: price, amount: m.type === 'sale' ? qty * price : '', worker: who.name,
         note: String(m.note || '').slice(0, 500), at: m.at || '', receivedAt: now,
-        source: m.type === 'restock' ? (bought ? 'bought' : 'own') : '',
+        source: m.type === 'restock' ? (bought ? 'bought' : m.source === 'own' ? 'own' : '') : '',
         supplier: bought ? String(m.supplier || '').slice(0, 100) : '',
         cost: bought ? Math.max(0, Number(m.cost) || 0) : '',
         reason: m.type === 'loss' ? (LOSS_REASONS.indexOf(m.reason) >= 0 ? m.reason : 'other') : '',
@@ -616,17 +617,18 @@ function report_(kind, period, asOf) {
   // Per item: how much was our own (harvest, workshop, born) and how much was bought, and what buying cost.
   var inMap = {};
   inPeriod.filter(function (m) { return m.type === 'restock'; }).forEach(function (m) {
-    var x = inMap[m.itemId] || (inMap[m.itemId] = { itemId: m.itemId, own: 0, bought: 0, spent: 0, suppliers: {} });
+    var x = inMap[m.itemId] || (inMap[m.itemId] = { itemId: m.itemId, own: 0, bought: 0, other: 0, spent: 0, suppliers: {} });
     if (m.source === 'bought') {
       x.bought += m.qty;
       x.spent += m.qty * m.cost;
       if (m.supplier) x.suppliers[m.supplier] = true;
-    } else x.own += m.qty;
+    } else if (m.source === 'own') x.own += m.qty;
+    else x.other += m.qty;
   });
   var incoming = Object.keys(inMap).map(function (k) {
     var x = inMap[k], it = items[k] || {};
     return { name: String(it.name || k), unit: String(it.unit || ''), category: String(it.category || ''), own: x.own, bought: x.bought,
-             spent: x.spent, suppliers: Object.keys(x.suppliers).join(', ') };
+             other: x.other, spent: x.spent, suppliers: Object.keys(x.suppliers).join(', ') };
   }).sort(function (a, b) { return a.name < b.name ? -1 : 1; });
   var lossMap = {};
   inPeriod.filter(function (m) { return m.type === 'loss'; }).forEach(function (m) {
@@ -772,17 +774,18 @@ function reportEmail_(r) {
     h('Best sellers');
     table(['Item', 'Sold', 'Sales'], r.top.map(function (t) { return [t.name, t.units + ' ' + t.unit, ksh_(t.amount)]; }));
   }
-  if (r.incoming.length) {
-    h('New stock: our own and bought');
-    // Honey, farm produce, animals and fish, and anything bought, one row each; the workshop's own items in one line.
-    var farmCats = ['Honey', 'Farm produce', 'Livestock', 'Fish'];
-    var listed = r.incoming.filter(function (x) { return x.bought || farmCats.indexOf(x.category) >= 0; });
-    var rest = r.incoming.filter(function (x) { return listed.indexOf(x) < 0; });
-    var rowsIn = listed.map(function (x) { return [shortName_(x.name), x.own + ' ' + x.unit, x.bought ? x.bought + ' ' + x.unit : '–', x.spent ? ksh_(x.spent) : '–', x.suppliers || '–']; });
-    if (rest.length) rowsIn.push(['Workshop / other own stock (' + rest.length + ' items)', rest.reduce(function (t, x) { return t + x.own; }, 0) + ' units', '–', '–', '–']);
-    table(['Item', 'Our own', 'Bought', 'Paid', 'Bought from'], rowsIn);
-    var paid = r.incoming.reduce(function (t, x) { return t + x.spent; }, 0);
-    if (paid) { html.push('<p style="margin:6px 0 0"><b>Paid for bought stock: ' + ksh_(paid) + '</b></p>'); lines.push('Paid for bought stock: ' + ksh_(paid)); }
+  var honeyIn = r.incoming.filter(function (x) { return x.own || x.bought; });
+  if (honeyIn.length) {
+    h('Honey in: our harvest and bought from farmers');
+    table(['Item', 'Our harvest', 'Bought', 'Paid', 'Bought from'], honeyIn.map(function (x) {
+      return [shortName_(x.name), x.own + ' ' + x.unit, x.bought ? x.bought + ' ' + x.unit : '–', x.spent ? ksh_(x.spent) : '–', x.suppliers || '–']; }));
+    var paid = honeyIn.reduce(function (t, x) { return t + x.spent; }, 0);
+    if (paid) { html.push('<p style="margin:6px 0 0"><b>Paid to farmers: ' + ksh_(paid) + '</b></p>'); lines.push('Paid to farmers: ' + ksh_(paid)); }
+  }
+  var otherIn = r.incoming.filter(function (x) { return x.other; });
+  if (otherIn.length) {
+    h('Other stock restocked');
+    table(['Item', 'Restocked'], otherIn.map(function (x) { return [shortName_(x.name), x.other + ' ' + x.unit]; }));
   }
   if (r.packing.times) {
     h('Packing');

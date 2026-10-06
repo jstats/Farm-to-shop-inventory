@@ -6,7 +6,7 @@
  * anything still waiting in the queue, so a worker always sees their own entries.
  */
 (function () {
-  var APP_VERSION = 14; // keep equal to VERSION in sw.js (a test checks)
+  var APP_VERSION = 15; // keep equal to VERSION in sw.js (a test checks)
   var CFG = window.BEELOVE_CONFIG || {};
   var DEMO = !CFG.apiUrl;
   var KEY = DEMO ? 'beelove-stock-demo:' : 'beelove-stock:';
@@ -407,6 +407,10 @@
     }).join('');
   }
 
+  /** Bulk honey (kg): harvested or bought from farmers. Packed honey (jars, bottles) only comes from Pack honey. */
+  function isBulkHoney(it) { return it.category === 'Honey' && it.unit === 'kg'; }
+  function isPackedHoney(it) { return it.category === 'Honey' && it.unit !== 'kg'; }
+
   var LOSS_REASONS = [['spoilt', 'Spoilt / rotten'], ['died', 'Died'], ['broken', 'Broken / damaged'], ['stolen', 'Stolen / missing'], ['other', 'Other']];
 
   function renderForm(v, type) {
@@ -422,11 +426,7 @@
     var lastPlace = isPlace(state.prefs.shop) ? state.prefs.shop : (myPlaces()[0] || lastShop);
     var where = '';
     if (type === 'restock') {
-      where = '<label class="field"><span>Where did the stock arrive?</span><select name="to">' + locOptions(locations(), lastPlace) + '</select></label>' +
-        '<div class="field"><span>Where did it come from?</span><div class="seg">' +
-        '<label><input type="radio" name="source" value="own" checked> 🏡 Our own<small>harvest, workshop, born</small></label>' +
-        '<label><input type="radio" name="source" value="bought"> 🛒 Bought<small>from a farmer or supplier</small></label></div></div>' +
-        '<label class="field" id="supplier-field" hidden><span>Bought from (name)</span><input type="text" name="supplier" maxlength="100" placeholder="e.g. Mutua, Kibwezi"></label>';
+      where = '<label class="field"><span>Where did the stock arrive?</span><select name="to">' + locOptions(locations(), lastPlace) + '</select></label>';
     } else if (type === 'transfer') {
       where = '<div class="row2"><label class="field"><span>From</span><select name="from">' + locOptions(locations(), f.id) + '</select></label>' +
         '<label class="field"><span>To</span><select name="to">' + locOptions(locations(), lastShop) + '</select></label></div>';
@@ -443,7 +443,7 @@
       where = '<label class="field"><span>Where are you counting?</span><select name="to">' + locOptions(locations(), lastPlace) + '</select></label>';
     }
     var help = {
-      restock: 'Enter how many arrived. Leave the rest empty.',
+      restock: 'Enter how many arrived. Leave the rest empty. Honey comes in as bulk kg: harvested or bought from farmers. Jars and bottles come from Pack honey.',
       transfer: 'Enter how many you are sending. Leave the rest empty.',
       sale: 'Enter how many were sold and the price for one.',
       loss: 'Enter how many were lost. Write what happened in the note.',
@@ -454,6 +454,20 @@
     items().forEach(function (it) { if (cats.indexOf(it.category) < 0) cats.push(it.category); });
     var list = cats.map(function (c) {
       return '<div class="cat" data-cat="' + esc(c) + '">' + esc(c) + '</div>' + items().filter(function (it) { return it.category === c; }).map(function (it) {
+        if (type === 'restock' && isBulkHoney(it)) {
+          // Bulk honey has two sources: our harvest, and honey bought from farmers (who, and the price per kg).
+          return '<div class="item bulk" data-item="' + esc(it.id) + '" data-cat="' + esc(c) + '">' +
+            '<div class="bulk-head"><div class="name">' + esc(it.name) + '</div><div class="meta">kg<span class="onhand"></span></div></div>' +
+            '<div class="row2"><div><label for="q-' + esc(it.id) + '">Our harvest (kg)</label>' +
+            '<input id="q-' + esc(it.id) + '" inputmode="decimal" name="qty" placeholder="–" autocomplete="off"></div>' +
+            '<div><label for="qb-' + esc(it.id) + '">Bought from farmers (kg)</label>' +
+            '<input id="qb-' + esc(it.id) + '" inputmode="decimal" name="qtyBought" placeholder="–" autocomplete="off"></div></div>' +
+            '<div class="row2 bought-box" hidden><div><label for="sup-' + esc(it.id) + '">Farmer’s name</label>' +
+            '<input id="sup-' + esc(it.id) + '" type="text" name="supplier" maxlength="100" placeholder="e.g. Mutua, Kibwezi"></div>' +
+            '<div><label for="cost-' + esc(it.id) + '">Price paid per kg</label>' +
+            '<input id="cost-' + esc(it.id) + '" inputmode="decimal" name="cost" placeholder="KSh" autocomplete="off"></div></div>' +
+            '<div class="warn" hidden></div><div class="price-box" hidden><input name="price"></div></div>';
+        }
         return '<div class="item sale-able" data-item="' + esc(it.id) + '" data-cat="' + esc(c) + '">' +
           '<div><div class="name">' + esc(it.name) + '</div><div class="meta">' + esc(it.unit) + (it.price ? ' · ' + ksh(it.price) : '') +
           '<span class="onhand"></span></div></div>' +
@@ -485,7 +499,6 @@
       '</form>';
 
     var form = $('#mv');
-    function bought() { return type === 'restock' && form.source && form.source.value === 'bought'; }
     function sourceLoc() {
       return type === 'sale' || type === 'transfer' || type === 'loss' ? form.from.value : null;
     }
@@ -493,6 +506,7 @@
     function allowed(it) {
       if (type === 'transfer') return Stock.kept(it, form.from.value) && Stock.kept(it, form.to.value);
       if (type === 'sale' && it.category === 'Packaging') return false; // empty jars are used, not sold
+      if (type === 'restock' && isPackedHoney(it)) return false;         // jars and bottles come from Pack honey
       return Stock.kept(it, type === 'sale' || type === 'loss' ? form.from.value : form.to.value);
     }
     function refresh() {
@@ -501,8 +515,7 @@
       var n = 0;
       var shown = 0;
       var term = ($('#filter').value || '').trim().toLowerCase();
-      var priced = type === 'sale' || bought();
-      if (type === 'restock') $('#supplier-field').hidden = !bought();
+      var priced = type === 'sale';
       Array.prototype.forEach.call(form.querySelectorAll('.item'), function (row) {
         var id = row.getAttribute('data-item');
         var it = itemById(id);
@@ -513,12 +526,11 @@
         var pb = row.querySelector('.price-box');
         pb.hidden = !priced;
         row.classList.toggle('sale', priced);
-        pb.querySelector('label').textContent = type === 'sale' ? 'Price each' : 'Paid each';
-        var pIn = pb.querySelector('input');
-        if (bought() && pIn.getAttribute('data-mode') !== 'cost') { pIn.value = ''; pIn.setAttribute('data-mode', 'cost'); }
-        if (type === 'restock' && !bought() && pIn.getAttribute('data-mode') === 'cost') pIn.setAttribute('data-mode', '');
+        if (pb.querySelector('label')) pb.querySelector('label').textContent = 'Price each';
         var q = row.querySelector('input[name=qty]').value.trim();
-        var has = here && q !== '' && (type === 'count' || Number(q) > 0);
+        var qb = row.querySelector('input[name=qtyBought]');
+        if (qb) row.querySelector('.bought-box').hidden = !(Number(qb.value) > 0);
+        var has = here && ((q !== '' && (type === 'count' || Number(q) > 0)) || (qb && Number(qb.value) > 0));
         row.classList.toggle('filled', has);
         if (has) n++;
         var oh = row.querySelector('.onhand');
@@ -555,49 +567,66 @@
       if (type === 'transfer' && from === to) { err.textContent = '“From” and “To” must be different places.'; return; }
       var reason = form.reason ? form.reason.value : '';
       if (type === 'loss' && !reason) { err.textContent = 'Choose what happened (spoilt, died, broken…).'; form.reason.focus(); return; }
-      var isBought = bought();
-      var supplier = isBought ? form.supplier.value.trim() : '';
-      if (isBought && !supplier) { err.textContent = 'Type who it was bought from.'; form.supplier.focus(); return; }
       var note = form.note.value.trim();
       var at = new Date().toISOString();
       var batch = uid(); // every line saved together: one delivery, one restock, …
       var out = [];
-      var bad = null, noPrice = null;
+      var bad = null, noPrice = null, noFarmer = null;
+      var line = function (id, q, extra) {
+        return Object.assign({ id: uid(), date: date, type: type, itemId: id, qty: q,
+          from: type === 'sale' || type === 'transfer' || type === 'loss' ? from : '',
+          to: type === 'sale' || type === 'loss' ? '' : to, price: 0, worker: state.profile.name, note: note, at: at, batch: batch }, extra || {});
+      };
       Array.prototype.forEach.call(form.querySelectorAll('.item'), function (row) {
         if (row.getAttribute('data-here') !== '1') return; // typed in before the place was changed: not for this place
+        var qbIn = row.querySelector('input[name=qtyBought]');
+        if (qbIn) {
+          // Bulk honey: a line for our harvest and a line for honey bought from a farmer.
+          var hv = row.querySelector('input[name=qty]').value.trim().replace(',', '.');
+          var bv = qbIn.value.trim().replace(',', '.');
+          if ((hv !== '' && !(Number(hv) >= 0)) || (bv !== '' && !(Number(bv) >= 0))) { bad = bad || row; return; }
+          if (Number(hv) > 0) out.push(line(row.getAttribute('data-item'), Number(hv), { source: 'own' }));
+          if (Number(bv) > 0) {
+            var farmer = row.querySelector('input[name=supplier]').value.trim();
+            var cv = row.querySelector('input[name=cost]').value.trim().replace(/,/g, '');
+            if (!farmer) { noFarmer = noFarmer || row; return; }
+            if (!(Number(cv) > 0)) { noPrice = noPrice || row; return; }
+            out.push(line(row.getAttribute('data-item'), Number(bv), { source: 'bought', supplier: farmer, cost: Number(cv) }));
+          }
+          return;
+        }
         var raw = row.querySelector('input[name=qty]').value.trim().replace(',', '.');
         if (raw === '') return;
         var q = Number(raw);
         if (!isFinite(q) || q < 0) { bad = bad || row; return; }
         if (q === 0 && type !== 'count') return;
         var id = row.getAttribute('data-item');
-        var price = 0, cost = 0;
-        if (type === 'sale' || isBought) {
+        var price = 0;
+        if (type === 'sale') {
           var pr = row.querySelector('input[name=price]').value.trim().replace(/,/g, '');
           var pv = Number(pr);
           if (pr === '' || pv === 0) { noPrice = noPrice || row; return; }
           if (!isFinite(pv) || pv < 0) { bad = bad || row; return; }
-          if (type === 'sale') price = pv; else cost = pv;
+          price = pv;
         }
-        var m = { id: uid(), date: date, type: type, itemId: id, qty: q,
-                  from: type === 'sale' || type === 'transfer' || type === 'loss' ? from : '',
-                  to: type === 'sale' || type === 'loss' ? '' : to, price: price, worker: state.profile.name, note: note, at: at, batch: batch };
-        if (type === 'restock') {
-          m.source = isBought ? 'bought' : 'own';
-          if (isBought) { m.supplier = supplier; m.cost = cost; }
-        }
-        if (type === 'loss') m.reason = reason;
-        out.push(m);
+        out.push(line(id, q, type === 'loss' ? { price: price, reason: reason } : { price: price }));
       });
       if (bad) {
         err.textContent = 'One of the numbers is not right. Use digits only.';
         bad.scrollIntoView({ block: 'center' });
         return;
       }
+      if (noFarmer) {
+        err.textContent = 'Type the name of the farmer the honey was bought from.';
+        noFarmer.scrollIntoView({ block: 'center' });
+        noFarmer.querySelector('input[name=supplier]').focus();
+        return;
+      }
       if (noPrice) {
-        err.textContent = type === 'sale' ? 'Type the price you sold at, for one.' : 'Type the price you paid, for one.';
+        var bulkRow = !!noPrice.querySelector('input[name=cost]');
+        err.textContent = bulkRow ? 'Type the price paid per kg.' : 'Type the price you sold at, for one.';
         noPrice.scrollIntoView({ block: 'center' });
-        noPrice.querySelector('input[name=price]').focus();
+        noPrice.querySelector(bulkRow ? 'input[name=cost]' : 'input[name=price]').focus();
         return;
       }
       if (!out.length) { err.textContent = 'Type a number next to at least one item.'; return; }
@@ -888,9 +917,9 @@
           '</td><td class="num">' + qty(a.after) + '</td><td class="num' + (a.delta < 0 ? ' neg' : '') + '">' + (a.delta > 0 ? '+' : '') + qty(a.delta) + '</td></tr>';
       }).join('') + '</tbody></table></div>' : '';
 
-    var inHtml = s.month.own || s.month.bought ? '<h2>New stock in ' + esc(monthName(ym)) + '</h2><div class="tiles">' +
-      tile('Our own', qty(s.month.own) + ' units', 'Harvested, made or born') +
-      tile('Bought', qty(s.month.bought) + ' units', 'Paid ' + ksh(s.month.spent)) + '</div>' : '';
+    var inHtml = s.month.own || s.month.bought ? '<h2>Honey in, ' + esc(monthName(ym)) + '</h2><div class="tiles">' +
+      tile('Our harvest', qty(s.month.own) + ' kg', 'From our apiaries') +
+      tile('Bought from farmers', qty(s.month.bought) + ' kg', 'Paid ' + ksh(s.month.spent)) + '</div>' : '';
     var lossHtml = s.losses.length ? '<h2>Losses in ' + esc(monthName(ym)) + '</h2><ul class="list">' + s.losses.map(function (l) {
       var it = itemById(l.itemId);
       return '<li><span class="grow">' + esc(it ? it.name : l.itemId) + '<br><span class="muted small">' + esc(reasonName(l.reason)) + '</span></span>' +
