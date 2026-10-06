@@ -86,8 +86,9 @@ test('backend seed items and locations match the app seed', () => {
   // JSON round trip: arrays made inside the vm have a different prototype.
   const plain = (x) => JSON.parse(JSON.stringify(x));
   const h = sheets.items.rows[0];
-  const cols = ['itemId', 'name', 'category', 'unit', 'price', 'reorderLevel', 'places', 'kgEach'].map((c) => h.indexOf(c));
-  assert.deepEqual(plain(sheets.items.rows.slice(1).map((r) => cols.map((i) => r[i]))), Seed.ITEMS.map((r) => (r.length > 7 ? r : r.concat(['']))));
+  const cols = ['itemId', 'name', 'category', 'unit', 'price', 'reorderLevel', 'places', 'kgEach', 'container'].map((c) => h.indexOf(c));
+  const pad = (r) => r.concat(['', '', '']).slice(0, 9);
+  assert.deepEqual(plain(sheets.items.rows.slice(1).map((r) => cols.map((i) => r[i]))), Seed.ITEMS.map(pad));
   assert.deepEqual(plain(sheets.locations.rows.slice(1).map((r) => r.slice(0, 3))), Seed.LOCATIONS);
 });
 
@@ -286,8 +287,10 @@ test('setup on an existing sheet adds the new items and fills places, keeping ed
   it.rows.forEach((r) => r.splice(7));
   it.rows[1][4] = 5555;
   ctx.setup();
-  assert.equal(it.rows[0].join(','), 'itemId,name,category,unit,price,reorderLevel,active,places,kgEach');
+  assert.equal(it.rows[0].join(','), 'itemId,name,category,unit,price,reorderLevel,active,places,kgEach,container');
   assert.equal(it.rows.find((r) => r[0] === 'honey-1kg')[8], 1);
+  assert.equal(it.rows.find((r) => r[0] === 'honey-1kg')[9], 'empty-jar-1kg');
+  assert.equal(it.rows.find((r) => r[0] === 'empty-jar-1kg')[2], 'Packaging');
   assert.equal(it.rows.length - 1, Seed.ITEMS.length);
   assert.equal(it.rows[1][4], 5555);  // setup never changes prices
   assert.equal(it.rows[1][7], 'Kiunduani Shop, Nairobi Shop');
@@ -459,4 +462,40 @@ test('only managers receive every entry; workers get their places\' and their ow
   assert.equal(ids({ name: 'Kalondu', pin: '2222' }), 'k,o,t');
   // Otieno works at Nairobi: Nairobi's sale, plus his own entry made at Kiunduani.
   assert.equal(ids({ name: 'Otieno Juma', pin: '3333' }), 'n,o');
+});
+
+test('empty jars: bought, used by packing, counted — the report shows jars filled off the record', () => {
+  const env = withPlaces(load());
+  const m = (id, date, extra) => ({ id, date, price: 0, from: '', to: '', at: date + 'T10:00:00Z', ...extra });
+  env.post({ action: 'save', ...mwende, movements: [
+    m('e1', '2026-10-01', { type: 'restock', itemId: 'empty-jar-150g', qty: 200, to: 'farm', source: 'bought', supplier: 'Glass Co', cost: 25 }),
+    m('h1', '2026-10-01', { type: 'restock', itemId: 'honey-bulk', qty: 50, to: 'farm', source: 'own' }),
+    // Packing records 60 jars filled, and the app takes 60 empties off the store.
+    m('p1', '2026-10-02', { type: 'pack', itemId: 'honey-bulk', qty: 9, from: 'farm', batch: 'P' }),
+    m('p2', '2026-10-02', { type: 'pack', itemId: 'honey-150g', qty: 60, to: 'farm', batch: 'P' }),
+    m('p3', '2026-10-02', { type: 'pack', itemId: 'empty-jar-150g', qty: 60, from: 'farm', batch: 'P' }),
+    m('b1', '2026-10-05', { type: 'loss', itemId: 'empty-jar-150g', qty: 2, from: 'farm', reason: 'broken' }),
+    // Month-end count finds 118 empties; the records say 138 → 20 jars were filled and not recorded.
+    m('c1', '2026-10-30', { type: 'count', itemId: 'empty-jar-150g', qty: 118, to: 'farm' }),
+  ] });
+  const r = env.ctx.report_('month', { start: '2026-10-01', end: '2026-10-31' }, '2026-11-04');
+  const e = r.containerFlow.find((x) => x.itemId === 'empty-jar-150g');
+  assert.deepEqual([e.start, e.in, e.packOut, e.lost, e.countDiff, e.end], [0, 200, 60, 2, -20, 118]);
+  const mail = env.ctx.reportEmail_(r);
+  assert.match(mail.html, /Empty jars and bottles/);
+  assert.match(mail.html, /jars filled and not recorded/);
+  // Empties are not honey: the honey flow does not list them.
+  assert.equal(r.honeyFlow.some((x) => x.itemId === 'empty-jar-150g'), false);
+  // Items carry their container link for the app.
+  const items = env.post({ action: 'data', ...mwende }).items;
+  assert.deepEqual(JSON.parse(JSON.stringify(items.find((i) => i.id === 'honey-500g').container)), ['empty-bottle-500g']);
+});
+
+test('empty jars running low at the farm are reported', () => {
+  const env = withPlaces(load());
+  env.post({ action: 'save', ...mwende, movements: [
+    { id: 'e1', date: '2026-10-01', type: 'restock', itemId: 'empty-jar-1kg', qty: 12, to: 'farm', from: '', price: 0, at: '2026-10-01T10:00:00Z' },
+  ] });
+  const r = env.ctx.report_('week', { start: '2026-09-28', end: '2026-10-04' }, '2026-10-05');
+  assert.ok(r.low.some((l) => l.name === 'Empty 1kg jar' && l.place === 'Farm' && l.qty === 12));
 });

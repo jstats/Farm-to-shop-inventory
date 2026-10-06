@@ -6,7 +6,7 @@
  * anything still waiting in the queue, so a worker always sees their own entries.
  */
 (function () {
-  var APP_VERSION = 13; // keep equal to VERSION in sw.js (a test checks)
+  var APP_VERSION = 14; // keep equal to VERSION in sw.js (a test checks)
   var CFG = window.BEELOVE_CONFIG || {};
   var DEMO = !CFG.apiUrl;
   var KEY = DEMO ? 'beelove-stock-demo:' : 'beelove-stock:';
@@ -492,6 +492,7 @@
     /** Is the item listed here? It must be kept at the chosen place (for a transfer: at both ends). */
     function allowed(it) {
       if (type === 'transfer') return Stock.kept(it, form.from.value) && Stock.kept(it, form.to.value);
+      if (type === 'sale' && it.category === 'Packaging') return false; // empty jars are used, not sold
       return Stock.kept(it, type === 'sale' || type === 'loss' ? form.from.value : form.to.value);
     }
     function refresh() {
@@ -654,11 +655,16 @@
     function containers() {
       return items().filter(function (it) { return it.category === 'Honey' && it.kgEach > 0 && it.id !== bulk.id && Stock.kept(it, form.place.value); });
     }
+    /** The empty containers (jar, bottle; later lids, labels) one filled unit uses up, if they are items. */
+    function empties(it) {
+      return (it.container || []).map(itemById).filter(function (c) { return c && c.active !== false; });
+    }
     function drawList() {
       $('#pack-list').innerHTML = containers().map(function (it) {
         return '<div class="item" data-item="' + esc(it.id) + '"><div><div class="name">' + esc(it.name) + '</div><div class="meta">' +
-          esc(it.unit) + ' · ' + it.kgEach + ' kg each</div></div><div><label for="q-' + esc(it.id) + '">How many</label>' +
-          '<input id="q-' + esc(it.id) + '" inputmode="decimal" name="qty" placeholder="–" autocomplete="off"></div></div>';
+          esc(it.unit) + ' · ' + it.kgEach + ' kg each<span class="empties"></span></div></div><div><label for="q-' + esc(it.id) + '">How many</label>' +
+          '<input id="q-' + esc(it.id) + '" inputmode="decimal" name="qty" placeholder="–" autocomplete="off"></div>' +
+          '<div class="warn" hidden></div></div>';
       }).join('');
     }
     function numbers() {
@@ -675,11 +681,26 @@
         packed += q * it.kgEach;
         lines.push({ itemId: it.id, qty: q });
       });
-      return { kg: kg, packed: Math.round(packed * 100) / 100, lines: lines, bad: bad };
+      // Empty containers used: one of each linked container per filled unit.
+      var used = {};
+      lines.forEach(function (l) { empties(itemById(l.itemId)).forEach(function (c) { used[c.id] = (used[c.id] || 0) + l.qty; }); });
+      return { kg: kg, packed: Math.round(packed * 100) / 100, lines: lines, bad: bad, used: used };
     }
     function refresh() {
       var n = numbers();
-      var onHand = Stock.onHand(movements(), bulk.id, form.place.value);
+      var mv = movements();
+      Array.prototype.forEach.call(form.querySelectorAll('#pack-list .item'), function (row) {
+        var cs = empties(itemById(row.getAttribute('data-item')));
+        var q = Number(row.querySelector('input').value) || 0;
+        var short = cs.filter(function (c) { return (n.used[c.id] || 0) > Stock.onHand(mv, c.id, form.place.value); });
+        row.querySelector('.empties').textContent = cs.length ? ' · ' + cs.map(function (c) {
+          return qty(Stock.onHand(mv, c.id, form.place.value)) + ' ' + c.name.toLowerCase() + 's';
+        }).join(', ') + ' in store' : '';
+        var w = row.querySelector('.warn');
+        w.hidden = !(q > 0 && short.length);
+        w.textContent = w.hidden ? '' : 'More than the empty ' + short.map(function (c) { return c.unit + 's'; }).join(' / ') + ' recorded in store. Check the number, or record the empties you bought.';
+      });
+      var onHand = Stock.onHand(mv, bulk.id, form.place.value);
       $('#bulk-left').textContent = qty(onHand) + ' kg of bulk honey recorded at ' + locName(form.place.value) + '.';
       var left = n.kg - n.packed;
       $('#pack-sum').innerHTML = '<p><b>In jars and bottles:</b> ' + qty(n.packed) + ' kg</p>' +
@@ -705,10 +726,17 @@
       var place = form.place.value;
       var onHand = Stock.onHand(movements(), bulk.id, place);
       if (n.kg > onHand && !window.confirm('Only ' + qty(onHand) + ' kg of bulk honey is recorded at ' + locName(place) + '. Save anyway?')) return;
+      var shortEmpties = Object.keys(n.used).filter(function (id) { return n.used[id] > Stock.onHand(movements(), id, place); });
+      if (shortEmpties.length && !window.confirm('More containers used than recorded in store:\n' + shortEmpties.map(function (id) {
+            return '• ' + itemById(id).name + ': ' + qty(n.used[id]) + ' used, ' + qty(Stock.onHand(movements(), id, place)) + ' in store';
+          }).join('\n') + '\n\nSave anyway? (Record the empties you bought with Restock.)')) return;
       var batch = uid(), at = new Date().toISOString(), note = form.note.value.trim();
       var base = { date: date, type: 'pack', price: 0, worker: state.profile.name, note: note, at: at, batch: batch };
       var out = [Object.assign({ id: uid(), itemId: bulk.id, qty: n.kg, from: place, to: '' }, base)].concat(n.lines.map(function (l) {
         return Object.assign({ id: uid(), itemId: l.itemId, qty: l.qty, from: '', to: place }, base);
+      })).concat(Object.keys(n.used).map(function (id) {
+        // The empty jars/bottles this packing used up.
+        return Object.assign({ id: uid(), itemId: id, qty: n.used[id], from: place, to: '' }, base);
       }));
       saveLines('pack', out, place);
     });
@@ -822,15 +850,15 @@
 
     var lowLi = function (l) {
       return '<li><span class="grow"><b>' + esc(l.item.name) + '</b><br><span class="muted small">' + esc(locName(l.location)) +
-        ' · reorder at ' + qty(l.item.reorderLevel) + ' · farm has ' + qty(stockAt(s, l.item.id, (farm() || {}).id)) + '</span></span>' +
+        ' · reorder at ' + qty(l.item.reorderLevel) + (l.location === (farm() || {}).id ? '' : ' · farm has ' + qty(stockAt(s, l.item.id, (farm() || {}).id))) + '</span></span>' +
         '<span class="pill ' + (l.qty <= 0 ? 'bad' : 'warn') + '">' + (l.qty <= 0 ? '⛔ Out' : '⚠ ' + qty(l.qty) + ' left') + '</span></li>';
     };
     var lowSorted = s.low.slice().sort(function (a, b) { return a.qty - b.qty; });
-    var low = '<h2>Low stock in shops</h2>' + (lowSorted.length
+    var low = '<h2>Low stock</h2>' + (lowSorted.length
       ? '<ul class="list">' + lowSorted.slice(0, 5).map(lowLi).join('') + '</ul>' +
         (lowSorted.length > 5 ? '<details class="more"><summary>Show ' + (lowSorted.length - 5) + ' more</summary><ul class="list">' +
           lowSorted.slice(5).map(lowLi).join('') + '</ul></details>' : '')
-      : '<p class="muted">✓ Every shop is above its reorder level.</p>');
+      : '<p class="muted">✓ Everything is above its reorder level.</p>');
 
     // The latest month-end window that has started: this month's from the 3rd-last day, otherwise last month's.
     var win = Stock.countWindow(today());
@@ -894,6 +922,22 @@
           '</td><td class="num">' + kg('sold') + '</td><td class="num">' + kg('lost') + '</td><td class="num">' + kg('countDiff') + '</td><td class="num"><b>' + kg('end') + '</b></td></tr>' +
           '</tbody></table></div>';
       }).join('') : '';
+    // Empty jars and bottles: bought, used for packing, broken, and what the count found.
+    var packIds = allItems().filter(function (it) { return it.category === 'Packaging'; }).map(function (it) { return it.id; });
+    var contRows = Stock.flow(movements(), packIds, locs.map(function (l) { return l.id; }), ym + '-01', today())
+      .filter(function (r) { return r.start || r.in || r.out || r.lost || r.countDiff || r.end; });
+    var contHtml = contRows.length ? '<h2>Empty jars and bottles in ' + esc(monthName(ym)) + '</h2>' +
+      '<p class="muted small">Start + Bought − Used for packing − Broken ± Count = Now. A minus count means more containers were used ' +
+      'than packing records show: jars filled and not recorded.</p>' +
+      '<div class="table-wrap"><table class="flow"><thead><tr><th>Container</th><th class="num">Start</th><th class="num">Bought</th>' +
+      '<th class="num">Used</th><th class="num">Broken</th><th class="num">±</th><th class="num">Now</th></tr></thead><tbody>' +
+      contRows.map(function (r) {
+        var it = itemById(r.itemId) || { name: r.itemId };
+        var where = locs.length > 1 && contRows.some(function (x) { return x.place !== r.place; }) ? ' · ' + locName(r.place) : '';
+        return '<tr><td>' + esc(it.name.replace(/^Empty /, '').replace(/ squeeze bottle$/, ' bottle')) + esc(where) + '</td><td class="num">' + qty(r.start) +
+          '</td><td class="num">' + qty(r.in) + '</td><td class="num">' + qty(r.packOut) + '</td><td class="num' + (r.lost > 0 ? ' low' : '') + '">' + qty(r.lost) +
+          '</td><td class="num' + (r.countDiff < 0 ? ' neg' : '') + '">' + signed(r.countDiff) + '</td><td class="num"><b>' + qty(r.end) + '</b></td></tr>';
+      }).join('') + '</tbody></table></div>' : '';
     var waiting = Stock.pendingDeliveries(movements(), [], today());
     var waitHtml = waiting.length ? '<h2>Deliveries not confirmed yet</h2><ul class="list">' + waiting.map(function (d) {
       var n = d.lines.reduce(function (t, x) { return t + x.qty; }, 0);
@@ -925,7 +969,7 @@
     var fresh = state.data && state.data.fetchedAt ? new Date(state.data.fetchedAt).toLocaleString('en-KE', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }) : '';
     v.innerHTML = '<h1>Dashboard</h1><p class="muted small">' + (DEMO ? 'Demo data' : 'Updated ' + esc(fresh)) +
       ' · <button class="btn link" data-act="sync">Refresh</button></p>' +
-      tiles + low + chart + byShop + inHtml + flowHtml + waitHtml + lossHtml + counts + adjHtml + table + top + recent;
+      tiles + low + chart + byShop + inHtml + flowHtml + contHtml + waitHtml + lossHtml + counts + adjHtml + table + top + recent;
     wireChart();
   }
 

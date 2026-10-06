@@ -179,3 +179,9 @@ test('app version and offline cache version match', () => {
   const sw = fs.readFileSync(__dirname + '/../docs/sw.js', 'utf8').match(/var VERSION = 'beelove-stock-v(\d+)';/)[1];
   assert.equal(app, sw);
 });
+
+test('packaging is watched for low stock where it is kept (the farm), not only in shops', () => {
+  const its = [{ id: 'ej', name: 'Empty jar', category: 'Packaging', price: 0, reorderLevel: 50, places: ['farm'] }];
+  const s = Stock.summarise({ items: its, locations, movements: [mv('2026-10-01', 'restock', 'ej', 30, '', 'farm')] }, '2026-10-05');
+  assert.deepEqual(s.low.map((l) => [l.item.id, l.location, l.qty]), [['ej', 'farm', 30]]);
+});

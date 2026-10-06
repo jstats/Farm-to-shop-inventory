@@ -5,6 +5,8 @@
  *   items      – what we sell. Edit names, prices and reorder levels here; set active = no to hide an item.
  *                places = where the item is kept (e.g. "Farm" or "Kiunduani Shop, Nairobi Shop"); empty = everywhere.
  *                Forms only list the items kept at the chosen place. kgEach = kg of honey in one unit (honey only).
+ *                container = the empty jar/bottle a filled unit uses up (itemIds, comma-separated: add lids or labels
+ *                later); packing takes them off the Packaging stock automatically.
  *   locations  – the farm and the shops (Kiunduani, Nairobi). Add a row with role = shop for a new branch.
  *   workers    – who may sign in: name + PIN. Set active = no when someone leaves. email + place decide who gets
  *                which reminder; place is where they work, several separated by commas (e.g. "Farm, Kiunduani Shop").
@@ -37,7 +39,7 @@ var REPORT_HOUR = 7;    // weekly report on Mondays, monthly report on the REPOR
 var REPORT_MONTH_DAY = 4;  // the month-end count may be done up to the 3rd, so the monthly report waits for it
 
 var TABS = {
-  items:     ['itemId', 'name', 'category', 'unit', 'price', 'reorderLevel', 'active', 'places', 'kgEach'],
+  items:     ['itemId', 'name', 'category', 'unit', 'price', 'reorderLevel', 'active', 'places', 'kgEach', 'container'],
   locations: ['locationId', 'name', 'role'],
   workers:   ['name', 'pin', 'active', 'email', 'place', 'role'],
   movements: ['movementId', 'date', 'type', 'itemId', 'itemName', 'qty', 'unit', 'from', 'to', 'price', 'amount',
@@ -45,7 +47,8 @@ var TABS = {
 };
 
 // From beelovefarm.org/shop/beekeeping (October 2026), plus farm produce, livestock and fish (prices to be set in the sheet).
-// reorderLevel = warn when a shop has this many or fewer. Then places (where it is kept) and, for honey, kgEach.
+// reorderLevel = warn when a shop (or, for Packaging, the farm) has this many or fewer. Then places (where it is kept)
+// and, for honey, kgEach and container (the empty jar/bottle it is filled into).
 // Same rows as docs/seed.js (a test keeps them equal).
 var SHOPS = 'Kiunduani Shop, Nairobi Shop';
 var ALL = 'Farm, Kiunduani Shop, Nairobi Shop';
@@ -72,11 +75,15 @@ var SEED_ITEMS = [
   ['cone-strainer', 'Cone Honey Strainer', 'Processing', 'piece', 900, 2, SHOPS],
   ['uncapping-fork', 'Uncapping Fork', 'Processing', 'piece', 700, 2, SHOPS],
   ['honey-bucket', 'Food-Grade Honey Bucket (20L)', 'Processing', 'bucket', 1200, 2, SHOPS],
-  ['honey-150g', 'Raw Organic Honey — 150g Jar', 'Honey', 'jar', 150, 20, ALL, 0.15],
-  ['honey-300g', 'Raw Organic Honey — 300g Squeeze Bottle', 'Honey', 'bottle', 300, 10, ALL, 0.3],
-  ['honey-500g', 'Raw Organic Honey — 500g Squeeze Bottle', 'Honey', 'bottle', 500, 10, ALL, 0.5],
-  ['honey-1kg', 'Raw Organic Honey — 1kg Jar', 'Honey', 'jar', 1000, 10, ALL, 1],
+  ['honey-150g', 'Raw Organic Honey — 150g Jar', 'Honey', 'jar', 150, 20, ALL, 0.15, 'empty-jar-150g'],
+  ['honey-300g', 'Raw Organic Honey — 300g Squeeze Bottle', 'Honey', 'bottle', 300, 10, ALL, 0.3, 'empty-bottle-300g'],
+  ['honey-500g', 'Raw Organic Honey — 500g Squeeze Bottle', 'Honey', 'bottle', 500, 10, ALL, 0.5, 'empty-bottle-500g'],
+  ['honey-1kg', 'Raw Organic Honey — 1kg Jar', 'Honey', 'jar', 1000, 10, ALL, 1, 'empty-jar-1kg'],
   ['honey-bulk', 'Raw honey — bulk (per kg)', 'Honey', 'kg', 0, 0, 'Farm', 1],
+  ['empty-jar-150g', 'Empty 150g jar', 'Packaging', 'jar', 0, 50, 'Farm'],
+  ['empty-bottle-300g', 'Empty 300g squeeze bottle', 'Packaging', 'bottle', 0, 30, 'Farm'],
+  ['empty-bottle-500g', 'Empty 500g squeeze bottle', 'Packaging', 'bottle', 0, 30, 'Farm'],
+  ['empty-jar-1kg', 'Empty 1kg jar', 'Packaging', 'jar', 0, 30, 'Farm'],
   ['matoke', 'Matoke', 'Farm produce', 'bunch', 0, 0, 'Farm'],
   ['ripe-bananas', 'Ripe bananas', 'Farm produce', 'bunch', 0, 0, 'Farm'],
   ['rabbit', 'Rabbit', 'Livestock', 'head', 0, 0, 'Farm'],
@@ -120,10 +127,11 @@ function setup() {
       var seed = SEED_ITEMS.filter(function (x) { return x[0] === id; })[0];
       if (seed && String(r[col('places') - 1]).trim() === '') items.getRange(i + 2, col('places')).setValue(seed[6]);
       if (seed && seed[7] && String(r[col('kgEach') - 1]).trim() === '') items.getRange(i + 2, col('kgEach')).setValue(seed[7]);
+      if (seed && seed[8] && String(r[col('container') - 1]).trim() === '') items.getRange(i + 2, col('container')).setValue(seed[8]);
     });
   }
   var add = SEED_ITEMS.filter(function (x) { return !have[x[0]]; }).map(function (x) {
-    var v = { itemId: x[0], name: x[1], category: x[2], unit: x[3], price: x[4], reorderLevel: x[5], active: 'yes', places: x[6], kgEach: x[7] || '' };
+    var v = { itemId: x[0], name: x[1], category: x[2], unit: x[3], price: x[4], reorderLevel: x[5], active: 'yes', places: x[6], kgEach: x[7] || '', container: x[8] || '' };
     return ihead.map(function (h) { return v.hasOwnProperty(h) ? v[h] : ''; });
   });
   if (add.length) items.getRange(items.getLastRow() + 1, 1, add.length, ihead.length).setValues(add);
@@ -164,6 +172,7 @@ function applyWebsitePrices() {
       r[col('price')] = seed[4];
       r[col('places')] = seed[6];
       r[col('kgEach')] = seed[7] || '';
+      r[col('container')] = seed[8] || '';
       if (String(r[col('reorderLevel')]).trim() === '') r[col('reorderLevel')] = seed[5];
     } else if (RETIRED.indexOf(id) >= 0) {
       r[col('active')] = 'no';
@@ -174,7 +183,7 @@ function applyWebsitePrices() {
     }
   });
   var add = SEED_ITEMS.filter(function (x) { return !have[x[0]]; }).map(function (x) {
-    var v = { itemId: x[0], name: x[1], category: x[2], unit: x[3], price: x[4], reorderLevel: x[5], active: 'yes', places: x[6], kgEach: x[7] || '' };
+    var v = { itemId: x[0], name: x[1], category: x[2], unit: x[3], price: x[4], reorderLevel: x[5], active: 'yes', places: x[6], kgEach: x[7] || '', container: x[8] || '' };
     changed.push(x[0] + ' (new)');
     return head.map(function (h) { return v.hasOwnProperty(h) ? v[h] : ''; });
   });
@@ -247,7 +256,8 @@ function data_() {
     items: rows_('items').filter(function (r) { return r.itemId; }).map(function (r) {
       return { id: String(r.itemId), name: String(r.name), category: String(r.category), unit: String(r.unit),
                price: Number(r.price) || 0, reorderLevel: Number(r.reorderLevel) || 0, active: yes_(r.active),
-               places: placeIds_(r.places), kgEach: Number(r.kgEach) || 0 };
+               places: placeIds_(r.places), kgEach: Number(r.kgEach) || 0,
+               container: String(r.container || '').split(/[,;]/).map(function (x) { return x.trim(); }).filter(Boolean) };
     }),
     locations: rows_('locations').filter(function (r) { return r.locationId; }).map(function (r) {
       return { id: String(r.locationId), name: String(r.name), role: String(r.role) };
@@ -642,7 +652,8 @@ function report_(kind, period, asOf) {
     var it = items[id];
     var level = Number(it.reorderLevel) || 0;
     if (!level || !yes_(it.active)) return;
-    shops.filter(function (l) { return kept(it, String(l.locationId)); }).forEach(function (l) {
+    var watch = String(it.category) === 'Packaging' ? locs : shops;  // empty jars run out at the farm, not in a shop
+    watch.filter(function (l) { return kept(it, String(l.locationId)); }).forEach(function (l) {
       var q = (r.balance[id] && r.balance[id][String(l.locationId)]) || 0;
       if (q <= level) low.push({ name: String(it.name), place: String(l.name), qty: q });
     });
@@ -656,6 +667,11 @@ function report_(kind, period, asOf) {
     .filter(function (r) { return r.start || r.in || r.out || r.sold || r.lost || r.countDiff || r.end; })
     .map(function (r) { r.name = String(items[r.itemId].name); r.unit = String(items[r.itemId].unit); r.placeName = placeName(r.place); r.kg = kgOf(r.itemId); return r; })
     .sort(function (a, b) { return a.placeName === b.placeName ? (a.name < b.name ? -1 : 1) : (a.placeName < b.placeName ? -1 : 1); });
+  var packaging = Object.keys(items).filter(function (id) { return String(items[id].category) === 'Packaging'; });
+  var containerFlow = flow_(moves, packaging, locs.map(function (l) { return String(l.locationId); }), period.start, period.end)
+    .filter(function (r) { return r.start || r.in || r.out || r.lost || r.countDiff || r.end; })
+    .map(function (r) { r.name = String(items[r.itemId].name); r.unit = String(items[r.itemId].unit); r.placeName = placeName(r.place); return r; })
+    .sort(function (a, b) { return a.name < b.name ? -1 : 1; });
   var packs = inPeriod.filter(function (m) { return m.type === 'pack'; });
   var packing = {
     times: Object.keys(packs.reduce(function (o, m) { o[m.batch] = true; return o; }, {})).length,
@@ -678,7 +694,7 @@ function report_(kind, period, asOf) {
   var out = { kind: kind, period: period, total: total, units: sales.reduce(function (t, m) { return t + m.qty; }, 0),
               prevTotal: prevSales.reduce(function (t, m) { return t + amount(m); }, 0), byShop: byShop, days: days,
               top: top, restocked: restocked, incoming: incoming, losses: losses, sent: sent, workers: workers, low: low,
-              honeyFlow: honeyFlow, packing: packing, short: short,
+              honeyFlow: honeyFlow, containerFlow: containerFlow, packing: packing, short: short,
               unconfirmed: Object.keys(unconfirmed).map(function (k) { return unconfirmed[k]; }) };
 
   if (kind === 'month') {
@@ -795,6 +811,15 @@ function reportEmail_(r) {
       flowRows.push(['Total kg', f1(t.start), f1(t.in), f1(t.out), f1(t.sold), f1(t.lost), f1(t.countDiff), f1(t.end)]);
     });
     table(['Item', 'Start', 'In', 'Out', 'Sold', 'Lost', '±', 'End'], flowRows);
+  }
+  if (r.containerFlow.length) {
+    h('Empty jars and bottles');
+    html.push('<p style="margin:0 0 6px;color:#565d52;font-size:13px">Start + Bought − Used for packing − Broken ± Count = End. ' +
+      'A minus count difference means more containers were used than packing records show: jars filled and not recorded.</p>');
+    table(['Container', 'Start', 'Bought', 'Used', 'Broken', '±', 'End'], r.containerFlow.map(function (x) {
+      return [x.name.replace(/^Empty /, '') + (r.containerFlow.some(function (y) { return y.place !== x.place; }) ? ' · ' + x.placeName : ''),
+              x.start, x.in, x.packOut, x.lost, (x.countDiff > 0 ? '+' : '') + x.countDiff, x.end];
+    }));
   }
   if (r.short.length) {
     h('Deliveries that arrived short');

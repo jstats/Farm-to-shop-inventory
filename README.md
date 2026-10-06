@@ -35,6 +35,13 @@ items kept at the chosen place, so the shop never sees sheep and the farm never 
 **No signal?** Workers record as normal. Entries wait on the phone ("3 waiting for signal" at the top) and
 are sent automatically when signal returns. Only the very first sign-in on a phone needs signal.
 
+**Empty jars and bottles.** They are stock items too (category *Packaging*, kept at the Farm): record them with
+*Restock → Bought* (supplier and price per jar) and count them at the month-end count. *Pack honey* uses them up
+automatically (each honey item's `container` column says which empty it is filled into), and warns when more are filled
+than are in store. Empties bought − used − broken must match the count; a minus count difference means jars were filled
+and not recorded. The dashboard and monthly report show this as *Empty jars and bottles*, and low empties at the farm
+appear under *Low stock*.
+
 **Following the honey.** The dashboard's *Honey flow* table (and the monthly report) shows, per place and honey product,
 Start + In − Out − Sold − Lost ± Count = Now, with totals in kg. Every kilo is followed from the hive or the farmer,
 through packing (`kgEach` in the items tab says how much honey each jar or bottle holds), delivery and the shelf, to the

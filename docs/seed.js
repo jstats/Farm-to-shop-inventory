@@ -6,8 +6,9 @@
   if (typeof module === 'object' && module.exports) module.exports = factory();
   else root.Seed = factory();
 })(typeof self !== 'undefined' ? self : this, function () {
-  // [itemId, name, category, unit, price, reorderLevel, places, kgEach]. places = where it is kept ('' = everywhere);
-  // kgEach = kg of honey in one unit (honey only), so packing can be checked by weight.
+  // [itemId, name, category, unit, price, reorderLevel, places, kgEach, container]. places = where it is kept ('' = everywhere);
+  // kgEach = kg of honey in one unit (honey only), so packing can be checked by weight;
+  // container = the empty jar/bottle (and later lids, labels: comma-separated itemIds) one filled unit uses up.
   // From beelovefarm.org/shop/beekeeping (October 2026), plus farm produce, livestock and fish (prices to be set).
   var SHOPS = 'Kiunduani Shop, Nairobi Shop';
   var ALL = 'Farm, Kiunduani Shop, Nairobi Shop';
@@ -34,11 +35,15 @@
     ['cone-strainer', 'Cone Honey Strainer', 'Processing', 'piece', 900, 2, SHOPS],
     ['uncapping-fork', 'Uncapping Fork', 'Processing', 'piece', 700, 2, SHOPS],
     ['honey-bucket', 'Food-Grade Honey Bucket (20L)', 'Processing', 'bucket', 1200, 2, SHOPS],
-    ['honey-150g', 'Raw Organic Honey — 150g Jar', 'Honey', 'jar', 150, 20, ALL, 0.15],
-    ['honey-300g', 'Raw Organic Honey — 300g Squeeze Bottle', 'Honey', 'bottle', 300, 10, ALL, 0.3],
-    ['honey-500g', 'Raw Organic Honey — 500g Squeeze Bottle', 'Honey', 'bottle', 500, 10, ALL, 0.5],
-    ['honey-1kg', 'Raw Organic Honey — 1kg Jar', 'Honey', 'jar', 1000, 10, ALL, 1],
+    ['honey-150g', 'Raw Organic Honey — 150g Jar', 'Honey', 'jar', 150, 20, ALL, 0.15, 'empty-jar-150g'],
+    ['honey-300g', 'Raw Organic Honey — 300g Squeeze Bottle', 'Honey', 'bottle', 300, 10, ALL, 0.3, 'empty-bottle-300g'],
+    ['honey-500g', 'Raw Organic Honey — 500g Squeeze Bottle', 'Honey', 'bottle', 500, 10, ALL, 0.5, 'empty-bottle-500g'],
+    ['honey-1kg', 'Raw Organic Honey — 1kg Jar', 'Honey', 'jar', 1000, 10, ALL, 1, 'empty-jar-1kg'],
     ['honey-bulk', 'Raw honey — bulk (per kg)', 'Honey', 'kg', 0, 0, 'Farm', 1],
+    ['empty-jar-150g', 'Empty 150g jar', 'Packaging', 'jar', 0, 50, 'Farm'],
+    ['empty-bottle-300g', 'Empty 300g squeeze bottle', 'Packaging', 'bottle', 0, 30, 'Farm'],
+    ['empty-bottle-500g', 'Empty 500g squeeze bottle', 'Packaging', 'bottle', 0, 30, 'Farm'],
+    ['empty-jar-1kg', 'Empty 1kg jar', 'Packaging', 'jar', 0, 30, 'Farm'],
     ['matoke', 'Matoke', 'Farm produce', 'bunch', 0, 0, 'Farm'],
     ['ripe-bananas', 'Ripe bananas', 'Farm produce', 'bunch', 0, 0, 'Farm'],
     ['rabbit', 'Rabbit', 'Livestock', 'head', 0, 0, 'Farm'],
@@ -63,10 +68,14 @@
       .filter(Boolean);
   }
 
+  function containerIds(text) {
+    return String(text || '').split(/[,;]/).map(function (x) { return x.trim(); }).filter(Boolean);
+  }
+
   function items() {
     return ITEMS.map(function (r) {
       return { id: r[0], name: r[1], category: r[2], unit: r[3], price: r[4], reorderLevel: r[5], active: true, places: placeIds(r[6]),
-               kgEach: r[7] || 0 };
+               kgEach: r[7] || 0, container: containerIds(r[8]) };
     });
   }
   function locations() {
@@ -114,7 +123,14 @@
         jars.forEach(function (it) {
           var n2 = it.reorderLevel * 8 + rnd(5);
           packedKg += n2 * it.kgEach;
+          // Buy the empty containers, then the packing uses them up.
+          mv(date, 'restock', it.container[0], n2 + 10 + rnd(10), '', 'farm', 0, 'Daniel');
+          out[out.length - 1].source = 'bought';
+          out[out.length - 1].supplier = 'Kenpoly';
+          out[out.length - 1].cost = it.kgEach >= 1 ? 60 : 30;
           mv(date, 'pack', it.id, n2, '', 'farm', 0, 'Daniel');
+          out[out.length - 1].batch = batch;
+          mv(date, 'pack', it.container[0], n2, 'farm', '', 0, 'Daniel');
           out[out.length - 1].batch = batch;
         });
         mv(date, 'pack', 'honey-bulk', Math.round(packedKg + 2), 'farm', '', 0, 'Daniel');

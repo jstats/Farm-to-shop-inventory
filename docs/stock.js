@@ -104,7 +104,7 @@
   /**
    * Everything the dashboard shows.
    * data = { items, locations, movements }, today = 'YYYY-MM-DD'.
-   * Shops are the locations with role 'shop'. Each item's reorderLevel is checked in every shop.
+   * Shops are the locations with role 'shop'. Each item's reorderLevel is checked in every shop (Packaging: wherever it is kept).
    */
   function summarise(data, today) {
     var items = data.items || [];
@@ -125,7 +125,9 @@
         total += q;
       });
       var reorder = num(it.reorderLevel);
-      var lowAt = reorder > 0 ? shops.filter(function (s) { return kept(it, s) && per[s] <= reorder; }) : [];
+      // Shops are watched for low stock; empty jars and bottles (Packaging) run out where packing happens.
+      var watch = it.category === 'Packaging' ? locations.map(function (l) { return l.id; }) : shops;
+      var lowAt = reorder > 0 ? watch.filter(function (s) { return kept(it, s) && per[s] <= reorder; }) : [];
       return {
         item: it,
         per: per,
