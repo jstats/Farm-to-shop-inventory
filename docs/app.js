@@ -6,19 +6,19 @@
  * anything still waiting in the queue, so a worker always sees their own entries.
  */
 (function () {
-  var APP_VERSION = 15; // keep equal to VERSION in sw.js (a test checks)
+  var APP_VERSION = 16; // keep equal to VERSION in sw.js (a test checks)
   var CFG = window.BEELOVE_CONFIG || {};
   var DEMO = !CFG.apiUrl;
   var KEY = DEMO ? 'beelove-stock-demo:' : 'beelove-stock:';
 
   var TYPES = {
-    restock: { title: 'Restock / harvest', ico: '📦', hint: 'Harvested, made, born or bought', verb: 'Restocked' },
-    transfer: { title: 'Send stock', ico: '🚚', hint: 'Move stock from the farm to a shop', verb: 'Sent' },
+    restock: { title: 'New stock in', ico: '📦', hint: 'Only stock that just arrived: harvest, workshop, supplier, born', verb: 'New stock' },
+    transfer: { title: 'Send stock', ico: '🚚', hint: 'Move stock from one place to another', verb: 'Sent' },
     sale: { title: 'Record sales', ico: '🧾', hint: 'What a shop or the market sold', verb: 'Sold' },
     loss: { title: 'Record loss', ico: '⚠️', hint: 'Spoilt, died, broken or stolen', verb: 'Lost' },
     pack: { title: 'Pack honey', ico: '🍯', hint: 'Fill jars and bottles from bulk honey', verb: 'Packed' },
     receive: { title: 'Delivery arrived', ico: '📥', hint: 'Check what arrived', verb: 'Received', hidden: true },
-    count: { title: 'Monthly count', ico: '📋', hint: 'Count what is on the shelf', verb: 'Counted' },
+    count: { title: 'Stock count', ico: '📋', hint: 'What is on the shelf now: the opening and month-end count', verb: 'Counted' },
   };
 
   // ---------- storage (wrapped: private mode or full storage must not break the app) ----------
@@ -425,29 +425,40 @@
     var lastShop = isShop(state.prefs.shop) ? state.prefs.shop : myShop || (shopList[0] || {}).id;
     var lastPlace = isPlace(state.prefs.shop) ? state.prefs.shop : (myPlaces()[0] || lastShop);
     var where = '';
+    // A box under the place that says what to check first (never counted, or a delivery not confirmed yet).
+    var checkBox = '<div class="check-box" id="place-warn" hidden></div>';
     if (type === 'restock') {
-      where = '<label class="field"><span>Where did the stock arrive?</span><select name="to">' + locOptions(locations(), lastPlace) + '</select></label>';
+      where = '<label class="field"><span>Where did the stock arrive?</span><select name="to">' + locOptions(locations(), lastPlace) + '</select></label>' + checkBox;
     } else if (type === 'transfer') {
-      where = '<div class="row2"><label class="field"><span>From</span><select name="from">' + locOptions(locations(), f.id) + '</select></label>' +
-        '<label class="field"><span>To</span><select name="to">' + locOptions(locations(), lastShop) + '</select></label></div>';
+      // No silent defaults: start from the places used last time, or the worker's only place; otherwise they choose.
+      var mine = myPlaces().filter(isPlace);
+      var fromDef = isPlace(state.prefs.from) ? state.prefs.from : mine.length === 1 ? mine[0] : '';
+      var toDef = isPlace(state.prefs.to) && state.prefs.to !== fromDef ? state.prefs.to : '';
+      where = '<div class="row2"><label class="field"><span>From (leaving)</span><select name="from"><option value="">Choose…</option>' +
+        locOptions(locations(), fromDef) + '</select></label>' +
+        '<label class="field"><span>To (arriving)</span><select name="to"><option value="">Choose…</option>' +
+        locOptions(locations(), toDef) + '</select></label></div>' +
+        '<p class="route" id="route"></p>';
     } else if (type === 'sale') {
       var sellAt = sellers.some(function (l) { return l.id === state.prefs.shop; }) ? state.prefs.shop : lastShop;
       where = '<label class="field"><span>Where was it sold?</span><select name="from">' + sellers.map(function (l) {
         return '<option value="' + esc(l.id) + '"' + (l.id === sellAt ? ' selected' : '') + '>' + esc(l.role === 'farm' ? l.name + ' (market)' : l.name) + '</option>';
-      }).join('') + '</select></label>';
+      }).join('') + '</select></label>' + checkBox;
     } else if (type === 'loss') {
       where = '<label class="field"><span>Where?</span><select name="from">' + locOptions(locations(), lastPlace) + '</select></label>' +
         '<label class="field"><span>What happened?</span><select name="reason"><option value="">Choose…</option>' +
         LOSS_REASONS.map(function (r) { return '<option value="' + r[0] + '">' + r[1] + '</option>'; }).join('') + '</select></label>';
     } else {
-      where = '<label class="field"><span>Where are you counting?</span><select name="to">' + locOptions(locations(), lastPlace) + '</select></label>';
+      where = '<label class="field"><span>Where are you counting?</span><select name="to">' + locOptions(locations(), lastPlace) + '</select></label>' + checkBox;
     }
     var help = {
-      restock: 'Enter how many arrived. Leave the rest empty. Honey comes in as bulk kg: harvested or bought from farmers. Jars and bottles come from Pack honey.',
-      transfer: 'Enter how many you are sending. Leave the rest empty.',
+      restock: 'Only stock that has <b>just arrived</b>: from the workshop, a supplier, a harvest, or born. ' +
+        'Stock that was already here goes in <b>Stock count</b>, not here. Honey comes in as bulk kg; jars and bottles come from Pack honey.',
+      transfer: 'Check <b>From</b> and <b>To</b>, then enter how many you are sending. Leave the rest empty.',
       sale: 'Enter how many were sold and the price for one.',
       loss: 'Enter how many were lost. Write what happened in the note.',
-      count: 'Count what is physically there and type it in. Type 0 if there are none. Leave empty only items you did not count.',
+      count: 'Count what is <b>on the shelf now</b> and type it in. Type 0 if there are none. Leave empty only items you did not count. ' +
+        'Use this for the first (opening) count too.',
     }[type];
 
     var cats = [];
@@ -504,7 +515,7 @@
     }
     /** Is the item listed here? It must be kept at the chosen place (for a transfer: at both ends). */
     function allowed(it) {
-      if (type === 'transfer') return Stock.kept(it, form.from.value) && Stock.kept(it, form.to.value);
+      if (type === 'transfer') return !!form.from.value && !!form.to.value && Stock.kept(it, form.from.value) && Stock.kept(it, form.to.value);
       if (type === 'sale' && it.category === 'Packaging') return false; // empty jars are used, not sold
       if (type === 'restock' && isPackedHoney(it)) return false;         // jars and bottles come from Pack honey
       return Stock.kept(it, type === 'sale' || type === 'loss' ? form.from.value : form.to.value);
@@ -540,7 +551,9 @@
           oh.textContent = ' · ' + qty(on) + ' at ' + locName(src);
           var over = has && Number(q) > on;
           warn.hidden = !over;
-          warn.textContent = over ? 'Only ' + qty(on) + ' recorded at ' + locName(src) + '. Check the number, or do a count.' : '';
+          warn.textContent = !over ? ''
+            : on <= 0 ? 'None recorded at ' + locName(src) + '. Is “' + (type === 'transfer' ? 'From' : 'Where') + '” right? If it is, count the stock there first.'
+            : 'Only ' + qty(on) + ' recorded at ' + locName(src) + '. Check the number, or do a count.';
         } else {
           oh.textContent = '';
           warn.hidden = true;
@@ -550,8 +563,41 @@
         var c = h.getAttribute('data-cat');
         h.hidden = !Array.prototype.some.call(form.querySelectorAll('.item'), function (r) { return r.getAttribute('data-cat') === c && !r.hidden; });
       });
-      $('#none-here').hidden = shown > 0 || !!term;
+      var choosing = type === 'transfer' && !(form.from.value && form.to.value);
+      $('#none-here').textContent = choosing ? 'Choose From and To first.'
+        : 'No items are kept at this place. Ask the manager to add it under "places" in the items tab.';
+      $('#none-here').hidden = (shown > 0 || !!term) && !choosing;
       $('#save-btn').textContent = n ? 'Save ' + n + ' item' + (n === 1 ? '' : 's') : 'Save';
+      paintChecks(mvts);
+    }
+    /** The From → To line, and what to do first at this place (count it, or confirm a delivery). */
+    function paintChecks(mvts) {
+      var route = $('#route');
+      if (route) {
+        var fv = form.from.value, tv = form.to.value;
+        route.innerHTML = fv && tv
+          ? 'From <b>' + esc(locName(fv)) + '</b> <span aria-hidden="true">→</span> to <b>' + esc(locName(tv)) + '</b>'
+          : 'Choose where the stock is leaving from and where it is going.';
+        route.classList.toggle('same', !!fv && fv === tv);
+      }
+      var box = $('#place-warn');
+      if (!box) return;
+      var at = type === 'sale' ? form.from.value : form.to.value;
+      var html = '';
+      if (type === 'restock' && at && !Stock.everCounted(mvts, at)) {
+        html = '⚠️ <b>' + esc(locName(at)) + ' has not been counted yet.</b> If this stock was already here before today, ' +
+          'it goes in Stock count, not here.<br><button type="button" class="btn secondary" data-form="count" data-place="' + esc(at) + '">Go to Stock count →</button>';
+      } else if ((type === 'sale' || type === 'count') && at) {
+        var d = Stock.pendingDeliveries(mvts, [at], today(), 30)[0];
+        if (d) {
+          var n = d.lines.reduce(function (t, x) { return t + x.qty; }, 0);
+          html = '📥 <b>A delivery to ' + esc(locName(at)) + ' is not confirmed yet:</b> ' + qty(n) + ' item' + (n === 1 ? '' : 's') +
+            ' from ' + esc(locName(d.from)) + ', sent ' + esc(niceDate(d.date)) + ' by ' + esc(d.worker) + '. Confirm it first, so the stock is right.' +
+            '<br><button type="button" class="btn" data-form="receive" data-place="' + esc(d.to) + '" data-batch="' + esc(d.batch) + '">Check delivery →</button>';
+        }
+      }
+      box.innerHTML = html;
+      box.hidden = !html;
     }
     form.addEventListener('input', refresh);
     form.addEventListener('change', refresh);
@@ -564,6 +610,7 @@
       if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || date > today()) { err.textContent = 'Pick a date that is today or earlier.'; return; }
       var from = form.from ? form.from.value : '';
       var to = form.to ? form.to.value : '';
+      if (type === 'transfer' && (!from || !to)) { err.textContent = 'Choose where the stock is leaving from (From) and where it is going (To).'; return; }
       if (type === 'transfer' && from === to) { err.textContent = '“From” and “To” must be different places.'; return; }
       var reason = form.reason ? form.reason.value : '';
       if (type === 'loss' && !reason) { err.textContent = 'Choose what happened (spoilt, died, broken…).'; form.reason.focus(); return; }
@@ -630,8 +677,28 @@
         return;
       }
       if (!out.length) { err.textContent = 'Type a number next to at least one item.'; return; }
+      var mvts = movements();
+      var lineText = function (m) {
+        var it = itemById(m.itemId) || {};
+        return '• ' + qty(m.qty) + (it.unit === 'kg' ? ' kg ' : ' × ') + (it.name || m.itemId);
+      };
+      if (type === 'transfer' && !window.confirm('Please check before sending:\n\nFROM:  ' + locName(from).toUpperCase() + '\nTO:  ' + locName(to).toUpperCase() +
+          '\n\n' + out.map(lineText).join('\n') + '\n\nIs this right?')) return;
+      if (type === 'restock' && !Stock.everCounted(mvts, to) && !window.confirm(locName(to) + ' has never been counted.\n\n' +
+          'Was ALL of this stock delivered, made or harvested just now?\n\nIf it was already on the shelf, press Cancel and use Stock count instead.')) return;
+      var place = type === 'sale' ? from : to;
+      var waiting = (type === 'sale' || type === 'count') && Stock.pendingDeliveries(mvts, [place], today(), 30)[0];
+      if (waiting && !window.confirm('A delivery from ' + locName(waiting.from) + ' to ' + locName(waiting.to) + ' is not confirmed yet.\n\n' +
+          'Press Cancel and confirm the delivery first, or OK to save anyway.')) return;
       var overs = form.querySelectorAll('.item[data-here="1"] .warn:not([hidden])').length;
-      if (overs && !window.confirm(overs + ' item' + (overs === 1 ? ' is' : 's are') + ' more than the stock recorded. Save anyway?')) return;
+      var src = sourceLoc();
+      if (overs && !window.confirm(overs + ' item' + (overs === 1 ? ' is' : 's are') + ' more than the stock recorded at ' + locName(src) +
+          '.\n\nIs “' + (type === 'transfer' ? 'From' : 'Where') + '” right? Save anyway?')) return;
+      var dup = Stock.recentDuplicate(mvts, out, state.profile.name, at, 10);
+      if (dup) {
+        var mins = Math.max(1, Math.round((Date.parse(at) - Date.parse(dup.at)) / 60000));
+        if (!window.confirm('You saved exactly the same entry ' + mins + ' minute' + (mins === 1 ? '' : 's') + ' ago.\n\nSave it AGAIN?')) return;
+      }
 
       commit(out);
     });
@@ -640,6 +707,7 @@
       var from = form.from ? form.from.value : '';
       var to = form.to ? form.to.value : '';
       state.prefs.shop = type === 'sale' || type === 'loss' ? from : to;
+      if (type === 'transfer') { state.prefs.from = from; state.prefs.to = to; }
       save('prefs', state.prefs);
       state.queue = state.queue.concat(out);
       save('queue', state.queue);
@@ -758,7 +826,7 @@
       var shortEmpties = Object.keys(n.used).filter(function (id) { return n.used[id] > Stock.onHand(movements(), id, place); });
       if (shortEmpties.length && !window.confirm('More containers used than recorded in store:\n' + shortEmpties.map(function (id) {
             return '• ' + itemById(id).name + ': ' + qty(n.used[id]) + ' used, ' + qty(Stock.onHand(movements(), id, place)) + ' in store';
-          }).join('\n') + '\n\nSave anyway? (Record the empties you bought with Restock.)')) return;
+          }).join('\n') + '\n\nSave anyway? (Record the empties you bought with New stock in.)')) return;
       var batch = uid(), at = new Date().toISOString(), note = form.note.value.trim();
       var base = { date: date, type: 'pack', price: 0, worker: state.profile.name, note: note, at: at, batch: batch };
       var out = [Object.assign({ id: uid(), itemId: bulk.id, qty: n.kg, from: place, to: '' }, base)].concat(n.lines.map(function (l) {
@@ -1071,6 +1139,7 @@
     var act = t.getAttribute('data-act');
     var tab = t.getAttribute('data-tab');
     if (form) {
+      if (t.closest('#mv') && !confirmLeave()) return; // a "go to count / check delivery" button inside a form
       var place = t.getAttribute('data-place');
       if (place) {
         state.prefs.shop = place;

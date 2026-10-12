@@ -185,3 +185,27 @@ test('packaging is watched for low stock where it is kept (the farm), not only i
   const s = Stock.summarise({ items: its, locations, movements: [mv('2026-10-01', 'restock', 'ej', 30, '', 'farm')] }, '2026-10-05');
   assert.deepEqual(s.low.map((l) => [l.item.id, l.location, l.qty]), [['ej', 'farm', 30]]);
 });
+
+test('everCounted: a place counts as counted once any count has been saved there', () => {
+  const ms = [mv('2026-10-01', 'restock', 'jar', 5, '', 'farm'), mv('2026-10-02', 'count', 'jar', 4, '', 'nairobi')];
+  assert.equal(Stock.everCounted(ms, 'nairobi'), true);
+  assert.equal(Stock.everCounted(ms, 'farm'), false);
+  assert.equal(Stock.everCounted([], 'farm'), false);
+});
+
+test('recentDuplicate: the same entry saved twice within minutes (the 9 Oct double restock)', () => {
+  const line = (batch, itemId, qty, at, extra = {}) =>
+    Object.assign(mv('2026-10-09', 'restock', itemId, qty, '', 'farm', 0, at), { batch, worker: 'Daniel' }, extra);
+  const first = [line('b1', 'jar', 8, '2026-10-09T18:10:00Z'), line('b1', 'hive', 2, '2026-10-09T18:10:00Z')];
+  const again = [line('b2', 'hive', 2, '2026-10-09T18:15:00Z'), line('b2', 'jar', 8, '2026-10-09T18:15:00Z')];
+  assert.deepEqual(Stock.recentDuplicate(first, again, 'Daniel', '2026-10-09T18:15:00Z', 10), { batch: 'b1', at: '2026-10-09T18:10:00Z' });
+  // not a duplicate: other numbers, another place, another worker, or too long ago
+  const changed = [line('b3', 'jar', 9, '2026-10-09T18:15:00Z'), line('b3', 'hive', 2, '2026-10-09T18:15:00Z')];
+  assert.equal(Stock.recentDuplicate(first, changed, 'Daniel', '2026-10-09T18:15:00Z', 10), null);
+  const otherPlace = again.map((m) => Object.assign({}, m, { to: 'kiunduani' }));
+  assert.equal(Stock.recentDuplicate(first, otherPlace, 'Daniel', '2026-10-09T18:15:00Z', 10), null);
+  assert.equal(Stock.recentDuplicate(first, again, 'Jonesmus', '2026-10-09T18:15:00Z', 10), null);
+  assert.equal(Stock.recentDuplicate(first, again, 'Daniel', '2026-10-09T18:40:00Z', 10), null);
+  // a line saved in the same batch is not compared with itself
+  assert.equal(Stock.recentDuplicate(first, first, 'Daniel', '2026-10-09T18:10:00Z', 10), null);
+});

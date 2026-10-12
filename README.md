@@ -11,32 +11,42 @@ Everything goes into a Google Sheet that you own.
 
 | Button | When | What it does |
 |---|---|---|
-| 📦 Restock / harvest | New stock arrives (hives from the workshop, equipment and empty jars from suppliers, bulk honey, produce) | Adds to a place. Honey is restocked only as **bulk kg**, split into *Our harvest* and *Bought from farmers* (farmer's name and price per kg). Jars and bottles never come from Restock: they come from *Pack honey* |
-| 🚚 Send stock | Stock leaves the farm for a shop (or between shops) | Takes from one place, adds to the other |
+| 📦 New stock in | Only stock that has **just arrived** (hives from the workshop, equipment and empty jars from suppliers, bulk honey, produce, animals born). Stock that was already there goes in *Stock count* | Adds to a place. Honey comes in only as **bulk kg**, split into *Our harvest* and *Bought from farmers* (farmer's name and price per kg). Jars and bottles never come from New stock in: they come from *Pack honey* |
+| 🚚 Send stock | Stock leaves the farm for a shop (or between shops) | Takes from one place, adds to the other. The worker chooses *From* and *To* and confirms both before saving |
 | 🧾 Record sales | End of the day, or after each sale | Takes from a shop, or from the **Farm (market)** for produce, animals and fish sold at the market |
 | ⚠️ Record loss | Something spoilt, died, broke or was stolen | Takes from a place, with the reason |
 | 🍯 Pack honey | Bulk honey is put into jars and bottles (shown to people who work where bulk honey is kept) | Takes the kg used from bulk honey, adds the jars/bottles filled, and shows what was left on the equipment |
 | 📥 Delivery arrived | A card appears at the shop when stock is sent to it | The shop types what actually arrived; anything short is recorded as lost on the way, with who sent and who received |
-| 📋 Monthly count | End of every month, at each place | Sets stock to what is really there; the difference shows as missing or extra |
+| 📋 Stock count | The opening count at each place, then the end of every month | Sets stock to what is really there; the difference shows as missing or extra |
 
 **Where things are kept.** Each item has `places` in the items tab: honey `Farm, Kiunduani Shop, Nairobi Shop`,
 hives and equipment `Kiunduani Shop, Nairobi Shop`, bananas, rabbits, sheep and fish `Farm`. Forms only list the
 items kept at the chosen place, so the shop never sees sheep and the farm never sees bee suits.
 
 **Typical flows**
-- Honey: Restock *Raw honey — bulk (kg)* at Farm, typing *Our harvest* and/or *Bought from farmers* (with the farmer's
+- Honey: *New stock in* of *Raw honey — bulk (kg)* at Farm, typing *Our harvest* and/or *Bought from farmers* (with the farmer's
   name and price per kg). Then *Pack honey* into jars and bottles, *Send stock* to the shops, and the shop confirms
-  the delivery. Stock sent from the farm is never restocked again at the shop: *Send stock* moves it.
-- Hives from the workshop and equipment from suppliers: Restock at the shop.
-- Matoke / ripe bananas: Restock at Farm when harvested → *Record sales* at *Farm (market)*. Rotten bunches → *Record loss*.
-- Rabbits, Dorper sheep, fish: Restock at Farm when born / stocked → *Record sales* at *Farm (market)*;
+  the delivery. Stock sent from the farm is never entered again as New stock in at the shop: *Send stock* moves it.
+- Hives from the workshop and equipment from suppliers: *New stock in* at the shop, on the day they arrive.
+- Matoke / ripe bananas: *New stock in* at Farm when harvested → *Record sales* at *Farm (market)*. Rotten bunches → *Record loss*.
+- Rabbits, Dorper sheep, fish: *New stock in* at Farm when born / stocked → *Record sales* at *Farm (market)*;
   deaths → *Record loss*; the monthly count is the headcount.
+
+**Checks that stop common mistakes.** The app asks before saving when:
+- *Send stock*: always, showing FROM and TO in capitals and the lines being sent. Nothing is pre-filled except the
+  places used last time (or the worker's only place); items appear once both places are chosen.
+- *New stock in* at a place that has never been counted: was all of it really delivered just now? If it was already
+  on the shelf, it belongs in *Stock count*. The form also shows a "Go to Stock count" button.
+- *Record sales* or *Stock count* while a delivery to that place is not confirmed yet: confirm the delivery first
+  ("Check delivery" button on the form).
+- More is sent or sold than is recorded at that place: is From/Where right?
+- The same entry (same items, numbers and places) was saved by the same person in the last 10 minutes.
 
 **No signal?** Workers record as normal. Entries wait on the phone ("3 waiting for signal" at the top) and
 are sent automatically when signal returns. Only the very first sign-in on a phone needs signal.
 
 **Empty jars and bottles.** They are stock items too (category *Packaging*, kept at the Farm): record them with
-*Restock* and count them at the month-end count. *Pack honey* uses them up
+*New stock in* and count them at the month-end *Stock count*. *Pack honey* uses them up
 automatically (each honey item's `container` column says which empty it is filled into), and warns when more are filled
 than are in store. Empties bought − used − broken must match the count; a minus count difference means jars were filled
 and not recorded. The dashboard and monthly report show this as *Empty jars and bottles*, and low empties at the farm
@@ -113,8 +123,9 @@ In Apps Script, pick `setupReminders` and press **Run** once (approve the email 
 To stop them: the ⏰ **Triggers** page in the left menu, delete the `reminders`, `weeklyReport` and `monthlyReport` triggers.
 
 ### 4. Day one: the opening count
-Before anything else, do a **Monthly count** at the farm, Kiunduani and Nairobi, with every item counted.
-That sets the starting stock. Until then the dashboard shows everything as "Out".
+Before anything else, do a **Stock count** at the farm, Kiunduani and Nairobi, with every item counted.
+That sets the starting stock. Until then the dashboard shows everything as "Out". Confirm any delivery that is on
+its way before counting the shop it is going to.
 
 ## Good to know
 

@@ -213,3 +213,10 @@ table.flow th { font-size: 0.66rem; letter-spacing: 0.02em; }
 .item.bulk .row2 { gap: 8px; }
 .item.bulk label { text-align: left; }
 .item.bulk input[name=supplier] { text-align: left; }
+
+/* Checks under "Where": place never counted, delivery not confirmed yet */
+.check-box { background: var(--warn-tint); color: var(--warn); border-radius: 12px; padding: 10px 12px; margin: 0 0 14px; font-size: 0.92rem; line-height: 1.4; }
+.check-box .btn { margin-top: 8px; width: auto; min-height: 0; padding: 8px 14px; font-size: 0.95rem; }
+/* Send stock: the From → To line, red when both are the same place */
+.route { margin: 0 0 12px; padding: 10px 12px; border-radius: 12px; background: var(--accent-tint); font-size: 1.1rem; text-align: center; }
+.route.same { background: var(--bad-tint); color: var(--bad); }

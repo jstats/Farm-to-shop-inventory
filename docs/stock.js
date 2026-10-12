@@ -355,6 +355,38 @@
     return movements.some(function (m) { return m.type === 'count' && m.to === locationId && m.date >= start; });
   }
 
+  /** True if `locationId` has ever had a stock count (its opening count included). */
+  function everCounted(movements, locationId) {
+    return movements.some(function (m) { return m.type === 'count' && m.to === locationId; });
+  }
+
+  /**
+   * The same entry saved twice: an earlier batch by the same worker, of the same type, places and item quantities,
+   * captured within `minutes` before `atIso`. `lines` are the new entry's lines. Returns { batch, at } or null.
+   */
+  function recentDuplicate(movements, lines, worker, atIso, minutes) {
+    if (!lines || !lines.length) return null;
+    var first = lines[0];
+    var key = function (ls) {
+      return ls.map(function (l) { return l.itemId + ':' + num(l.qty) + ':' + (l.source || ''); }).sort().join('|');
+    };
+    var want = key(lines);
+    var now = Date.parse(atIso);
+    var mine = {};
+    lines.forEach(function (l) { mine[l.batch] = true; });
+    var groups = {};
+    movements.forEach(function (m) {
+      if (!m.batch || mine[m.batch] || m.type !== first.type || m.worker !== worker) return;
+      if ((m.from || '') !== (first.from || '') || (m.to || '') !== (first.to || '')) return;
+      var t = Date.parse(m.at);
+      if (!isFinite(t) || !isFinite(now) || now - t < 0 || now - t > (minutes || 10) * 60000) return;
+      (groups[m.batch] = groups[m.batch] || { batch: m.batch, at: m.at, lines: [] }).lines.push(m);
+    });
+    var hit = Object.keys(groups).map(function (k) { return groups[k]; }).filter(function (g) { return key(g.lines) === want; })[0];
+    return hit ? { batch: hit.batch, at: hit.at } : null;
+  }
+
   return { TYPES: TYPES, kept: kept, replay: replay, flow: flow, flowKg: flowKg, pendingDeliveries: pendingDeliveries, summarise: summarise, onHand: onHand, monthsBack: monthsBack, sortMovements: sortMovements,
-           soldOn: soldOn, daysLeftInMonth: daysLeftInMonth, countWindow: countWindow, countedSince: countedSince };
+           soldOn: soldOn, daysLeftInMonth: daysLeftInMonth, countWindow: countWindow, countedSince: countedSince,
+           everCounted: everCounted, recentDuplicate: recentDuplicate };
 });
