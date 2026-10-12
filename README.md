@@ -131,6 +131,9 @@ its way before counting the shop it is going to.
 
 - **Mistakes:** don't edit or delete rows in `movements`. If a number was wrong, the next count corrects the stock.
   If a whole entry was wrong, you can delete that row in the sheet; the change shows on the next refresh.
+- **Starting over:** rename the `movements` tab (for example *movements-test october*, as done on 12 Oct 2026) and add a
+  new empty tab named exactly `movements`. The app writes the column headings with the first entry. Check first that no
+  phone has entries waiting to send, then do an opening Stock count at every place.
 - **New branch:** add a row to `locations` with role `shop`. It appears in every form and on the dashboard.
 - **Someone leaves:** set `active` to `no` in `workers`. Their old entries keep their name.
 - **Forgotten PIN:** change it in `workers`. After 5 wrong PINs, that name is locked for 15 minutes.
