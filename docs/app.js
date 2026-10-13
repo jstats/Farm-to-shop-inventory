@@ -6,7 +6,7 @@
  * anything still waiting in the queue, so a worker always sees their own entries.
  */
 (function () {
-  var APP_VERSION = 16; // keep equal to VERSION in sw.js (a test checks)
+  var APP_VERSION = 17; // keep equal to VERSION in sw.js (a test checks)
   var CFG = window.BEELOVE_CONFIG || {};
   var DEMO = !CFG.apiUrl;
   var KEY = DEMO ? 'beelove-stock-demo:' : 'beelove-stock:';
@@ -86,14 +86,19 @@
   }
   function itemById(id) { return allItems().filter(function (i) { return i.id === id; })[0]; }
 
-  /** Sheet movements plus the queue (the queue wins on the same id). */
-  function movements() {
+  /** Sheet movements plus the queue (the queue wins on the same id), rejected entries included. */
+  function allMovements() {
     var byId = {};
     var out = [];
     state.queue.forEach(function (m) { byId[m.id] = true; out.push(m); });
     ((state.data && state.data.movements) || []).forEach(function (m) { if (!byId[m.id]) out.push(m); });
     return out;
   }
+  /** The movements that count: rejected entries are left out of every figure. */
+  function movements() {
+    return Stock.withoutRejected(allMovements(), rejections());
+  }
+  function rejections() { return (state.data && state.data.rejections) || []; }
 
   // ---------- backend ----------
   function api(body) {
@@ -109,18 +114,22 @@
   function errorText(code) {
     if (code === 'wrong_pin') return 'Name or PIN is not right.';
     if (code === 'locked') return 'Too many wrong PINs. Wait 15 minutes and try again.';
+    if (code === 'not_allowed') return 'Only a manager can do this.';
+    if (code === 'reason_needed') return 'Write why, so others understand.';
+    if (code === 'update_backend') return 'The stock sheet needs its script updated before entries can be rejected.';
+    if (code === 'not_found') return 'That entry is not in the sheet yet. Try again when it has been sent.';
     return 'Something went wrong (' + code + ').';
   }
 
   function demoData() {
-    return { items: Seed.items(), locations: Seed.locations(), movements: Seed.demoMovements(today()), fetchedAt: new Date().toISOString() };
+    return { items: Seed.items(), locations: Seed.locations(), movements: Seed.demoMovements(today()), rejections: [], fetchedAt: new Date().toISOString() };
   }
 
   /** Sends the queue, then pulls the latest from the sheet. Quiet on failure: entries stay queued. */
   function sync() {
     if (!state.profile) return Promise.resolve();
     if (DEMO) {
-      state.data.movements = movements();
+      state.data.movements = allMovements();
       state.queue = [];
       save('data', state.data);
       save('queue', state.queue);
@@ -149,7 +158,8 @@
       return api({ action: 'data' });
     }).then(function (res) {
       if (!res.ok) throw res;
-      state.data = { items: res.items, locations: res.locations, movements: res.movements, fetchedAt: new Date().toISOString() };
+      state.data = { items: res.items, locations: res.locations, movements: res.movements, rejections: res.rejections || [],
+                     fetchedAt: new Date().toISOString() };
       save('data', state.data);
       if (state.profile.role !== (res.role || '') || JSON.stringify(state.profile.places) !== JSON.stringify(res.places || [])) {
         state.profile.role = res.role || '';
@@ -269,7 +279,8 @@
         state.profile.name = res.worker; // as spelled in the sheet
         state.profile.places = res.places || [];
         state.profile.role = res.role || '';
-        state.data = { items: res.items, locations: res.locations, movements: res.movements, fetchedAt: new Date().toISOString() };
+        state.data = { items: res.items, locations: res.locations, movements: res.movements, rejections: res.rejections || [],
+                       fetchedAt: new Date().toISOString() };
         save('data', state.data);
         afterSignIn();
       }).catch(function (x) {
@@ -365,12 +376,13 @@
   }
 
   function recentMine() {
-    var mine = Stock.sortMovements(movements().filter(function (m) { return m.worker === state.profile.name; })).reverse().slice(0, 6);
+    var mine = Stock.sortMovements(allMovements().filter(function (m) { return m.worker === state.profile.name; })).reverse().slice(0, 6);
     if (!mine.length) return '';
-    return '<h2>Your latest entries</h2><ul class="list">' + mine.map(movementLi).join('') + '</ul>';
+    var gone = Stock.rejectedKeys(rejections());
+    return '<h2>Your latest entries</h2><ul class="list">' + mine.map(function (m) { return movementLi(m, gone[Stock.entryKey(m)]); }).join('') + '</ul>';
   }
 
-  function movementLi(m) {
+  function movementLi(m, rejected) {
     var it = itemById(m.itemId);
     var name = it ? it.name : m.itemId;
     var unit = it ? it.unit : '';
@@ -384,10 +396,10 @@
       : m.type === 'pack' ? (m.from ? ' · taken for packing' : ' · filled') : '';
     if (m.type === 'pack') where = m.from ? locName(m.from) : locName(m.to);
     if (m.type === 'receive') where = locName(m.from) + ' → ' + locName(m.to);
-    return '<li><span class="muted small" style="width:48px">' + esc(niceDate(m.date)) + '</span>' +
+    return '<li' + (rejected ? ' class="rejected"' : '') + '><span class="muted small" style="width:48px">' + esc(niceDate(m.date)) + '</span>' +
       '<span class="grow"><b>' + esc(TYPES[m.type] ? TYPES[m.type].verb : m.type) + ' ' + qty(m.qty) + ' ' + esc(unit) + '</b> ' + esc(name) +
       '<br><span class="muted small">' + esc(where) + extra + ' · ' + esc(m.worker) + (m.note ? ' · “' + esc(m.note) + '”' : '') + '</span></span>' +
-      (pending ? '<span class="pill wait">waiting</span>' : '') + '</li>';
+      (pending ? '<span class="pill wait">waiting</span>' : rejected ? '<span class="pill bad" title="' + esc('Rejected by ' + rejected.by + ': ' + rejected.reason) + '">Rejected</span>' : '') + '</li>';
   }
 
   function reasonName(r) {
@@ -858,7 +870,10 @@
           '<div class="warn" hidden></div></div>';
       }).join('') +
       '<label class="field" style="margin-top:16px"><span>Note (optional)</span><textarea name="note" maxlength="500" placeholder="e.g. 2 jars broken in the box"></textarea></label>' +
-      '<div class="err" id="form-err"></div><div class="form-pad"></div>' +
+      '<div class="err" id="form-err"></div>' +
+      '<div class="never-box"><p class="muted small">Nothing came, or it was saved by mistake (for example sent twice)?</p>' +
+      '<button type="button" class="btn secondary small" data-act="never-came" data-key="' + esc(d.batch) + '">This delivery never came</button></div>' +
+      '<div class="form-pad"></div>' +
       '<div class="savebar"><button class="btn" type="submit" id="save-btn">Confirm delivery</button></div></form>';
     var form = $('#mv');
     function check() {
@@ -1061,13 +1076,138 @@
         '</span><span class="num" style="min-width:96px">' + ksh(t.amount) + '</span></li>';
     }).join('') + '</ul>' : '';
 
-    var recent = '<h2>Latest activity</h2>' + (s.recent.length ? '<ul class="list">' + s.recent.slice(0, 12).map(movementLi).join('') + '</ul>' : '<p class="muted">Nothing recorded yet.</p>');
+    var gone = Stock.rejectedKeys(rejections());
+    var allEntries = Stock.entries(allMovements());
+    var recentEntries = allEntries.slice(0, 15);
+    var recent = '<h2>Latest entries</h2>' + (recentEntries.length
+      ? '<p class="muted small">Reject an entry that is wrong: it stays in the sheet but is left out of stock and reports. You can restore it.</p>' +
+        '<ul class="list">' + recentEntries.map(function (e) { return entryLi(e, gone[e.key], true); }).join('') + '</ul>'
+      : '<p class="muted">Nothing recorded yet.</p>');
+    var rejectedList = allEntries.filter(function (e) { return gone[e.key]; });
+    var rejectedHtml = rejectedList.length ? '<details class="more"><summary>Rejected entries (' + rejectedList.length + ')</summary><ul class="list">' +
+      rejectedList.map(function (e) { return entryLi(e, gone[e.key], true); }).join('') + '</ul></details>' : '';
+    var checkList = Stock.checks(allMovements(), rejections(), today());
+    var checkHtml = checkList.length ? checksHtml(checkList)
+      : '<h2>Check these entries</h2><p class="muted">✓ Nothing looks wrong: no stock below zero, nothing saved twice, no delivery waiting too long.</p>';
 
     var fresh = state.data && state.data.fetchedAt ? new Date(state.data.fetchedAt).toLocaleString('en-KE', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }) : '';
+    // Five short tabs instead of one long page; the last one used is remembered.
+    var tabs = [['overview', 'Overview'], ['sales', 'Sales'], ['stock', 'Stock'], ['honey', 'Honey'], ['entries', 'Entries']];
+    var tab = tabs.some(function (t) { return t[0] === state.prefs.dash; }) ? state.prefs.dash : 'overview';
+    var nav = '<div class="dash-tabs" role="tablist" aria-label="Dashboard sections">' + tabs.map(function (t) {
+      return '<button type="button" role="tab" data-act="dash" data-dash="' + t[0] + '" aria-selected="' + (t[0] === tab) + '">' + t[1] +
+        (t[0] === 'entries' && checkList.length ? '<span class="badge" aria-label="' + checkList.length + ' to check">' + checkList.length + '</span>' : '') + '</button>';
+    }).join('') + '</div>';
+    var more = function (to, label) { return '<p class="see-more"><button type="button" class="btn link" data-act="dash" data-dash="' + to + '">' + label + ' →</button></p>'; };
+
+    var body;
+    if (tab === 'sales') {
+      body = chart + byShop + top + lossHtml;
+    } else if (tab === 'stock') {
+      body = table + low + counts + adjHtml + waitHtml;
+    } else if (tab === 'honey') {
+      body = inHtml + flowHtml + contHtml || '<p class="muted" style="margin-top:16px">No honey or jars moved this month yet.</p>';
+    } else if (tab === 'entries') {
+      body = checkHtml + recent + rejectedHtml;
+    } else {
+      var attention = checkList.length
+        ? '<button type="button" class="check-banner" data-act="dash" data-dash="entries"><span aria-hidden="true">⚠️</span><span class="grow"><b>' +
+          checkList.length + ' entr' + (checkList.length === 1 ? 'y' : 'ies') + ' to check</b><br><span class="small">Stock below zero, saved twice or not confirmed</span></span><span aria-hidden="true">›</span></button>'
+        : '';
+      var lowTop = '<h2>Low stock</h2>' + (lowSorted.length ? '<ul class="list">' + lowSorted.slice(0, 3).map(lowLi).join('') + '</ul>' +
+        (lowSorted.length > 3 ? more('stock', 'All ' + lowSorted.length + ' low items') : '') : '<p class="muted">✓ Everything is above its reorder level.</p>');
+      var latest = recentEntries.length ? '<h2>Latest entries</h2><ul class="list">' + recentEntries.slice(0, 5).map(function (e) { return entryLi(e, gone[e.key]); }).join('') + '</ul>' +
+        more('entries', 'All entries') : '';
+      body = attention + tiles + lowTop + waitHtml + (win.closed ? '' : counts) + latest;
+    }
     v.innerHTML = '<h1>Dashboard</h1><p class="muted small">' + (DEMO ? 'Demo data' : 'Updated ' + esc(fresh)) +
-      ' · <button class="btn link" data-act="sync">Refresh</button></p>' +
-      tiles + low + chart + byShop + inHtml + flowHtml + contHtml + waitHtml + lossHtml + counts + adjHtml + table + top + recent;
-    wireChart();
+      ' · <button class="btn link" data-act="sync">Refresh</button></p>' + nav + '<div class="dash-body">' + body + '</div>';
+    if (tab === 'sales') wireChart();
+  }
+
+  // ---------- checking entries: reject, restore, keep ----------
+  /** One entry (lines saved together) as a list row, with Reject or Restore for managers. */
+  function entryLi(e, rejected, actions) {
+    var T = TYPES[e.type] || { verb: e.type };
+    var line = function (m) {
+      var it = itemById(m.itemId) || { name: m.itemId, unit: '' };
+      return qty(m.qty) + ' ' + it.unit + ' ' + it.name;
+    };
+    var shown = e.type === 'pack' ? e.lines.filter(function (m) { return m.to; }) : e.lines;
+    if (!shown.length) shown = e.lines;
+    var what = line(shown[0]) + (shown.length > 1 ? ' + ' + (shown.length - 1) + ' more' : '');
+    var where = e.type === 'transfer' ? locName(e.from) + ' → ' + locName(e.to)
+      : e.type === 'sale' || e.type === 'loss' ? placeLabel(e.from) : locName(e.to || e.from);
+    var extra = e.type === 'sale' ? ' · ' + ksh(e.lines.reduce(function (t, m) { return t + m.qty * m.price; }, 0))
+      : e.type === 'transfer' ? (e.received ? ' · confirmed by ' + e.received.by : ' · not confirmed') : '';
+    var pending = e.lines.some(function (m) { return state.queue.some(function (q) { return q.id === m.id; }); });
+    var right = pending ? '<span class="pill wait">waiting</span>'
+      : actions && isManager() ? '<button class="btn secondary small" data-act="' + (rejected ? 'restore' : 'reject') + '" data-key="' + esc(e.key) + '">' +
+        (rejected ? 'Restore' : 'Reject') + '</button>'
+      : rejected ? '<span class="pill bad">Rejected</span>' : '';
+    return '<li' + (rejected ? ' class="rejected"' : '') + '><span class="muted small" style="width:48px">' + esc(niceDate(e.date)) + '</span>' +
+      '<span class="grow"><b>' + esc(T.verb) + '</b> ' + esc(what) +
+      '<br><span class="muted small">' + esc(where) + esc(extra) + ' · ' + esc(e.worker) + '</span>' +
+      (rejected ? '<br><span class="small reject-note">Rejected by ' + esc(rejected.by) + ': “' + esc(rejected.reason) + '”</span>' : '') +
+      '</span>' + right + '</li>';
+  }
+
+  /** The dashboard's "Check these entries": stock below zero, entries saved twice, deliveries never confirmed. */
+  function checksHtml(list) {
+    if (!list.length) return '';
+    var cards = list.map(function (c) {
+      var head;
+      if (c.kind === 'negative') {
+        var it = itemById(c.itemId) || { name: c.itemId, unit: '' };
+        head = '⛔ <b>' + esc(locName(c.place)) + ': ' + esc(it.name) + ' is at ' + qty(c.qty) + '.</b> Stock cannot be below zero: ' +
+          'one of these entries is wrong, or the stock there was never counted.';
+      } else if (c.kind === 'twice') {
+        head = '⧉ <b>Saved twice?</b> These two entries are the same and were saved within a day of each other. Reject the extra one, ' +
+          'or keep both if both really happened.';
+      } else {
+        head = '⏳ <b>Delivery not confirmed after ' + c.days + ' days.</b> If it never came, reject it; if it came, the shop should confirm it.';
+      }
+      var gone = {};
+      return '<div class="check-card">' + '<p>' + head + '</p><ul class="list">' + c.entries.map(function (e) { return entryLi(e, gone[e.key], true); }).join('') + '</ul>' +
+        (c.kind === 'twice' ? '<button class="btn secondary small" data-act="keep" data-key="' + esc(c.key) + '">Both are right</button>' : '') + '</div>';
+    }).join('');
+    return '<h2>Check these entries (' + list.length + ')</h2>' + cards;
+  }
+
+  function entryText(key) {
+    var e = Stock.entries(allMovements()).filter(function (x) { return x.key === key; })[0];
+    if (!e) return '';
+    var it = itemById(e.lines[0].itemId) || { name: e.lines[0].itemId, unit: '' };
+    return (TYPES[e.type] || { verb: e.type }).verb + ' ' + qty(e.lines[0].qty) + ' ' + it.unit + ' ' + it.name +
+      (e.lines.length > 1 ? ' + ' + (e.lines.length - 1) + ' more' : '') + ', ' + niceDate(e.date) + ', by ' + e.worker;
+  }
+
+  /** Records a reject / restore / keep in the sheet (needs signal), then refreshes. */
+  function review(key, decision, reason) {
+    var row = { key: key, action: decision, reason: reason || '', by: state.profile.name, at: new Date().toISOString() };
+    if (DEMO) {
+      state.data.rejections = rejections().concat([row]);
+      save('data', state.data);
+      render();
+      return Promise.resolve(true);
+    }
+    if (state.reviewing) return Promise.resolve(false);
+    state.reviewing = true;
+    return api({ action: 'review', key: key, decision: decision, reason: reason || '' }).then(function (res) {
+      if (!res.ok) throw res;
+      if (!res.rejections) throw { error: 'update_backend' };  // the sheet still runs a script without 'review'
+      state.data.rejections = res.rejections;
+      save('data', state.data);
+      return true;
+    }).catch(function (err) {
+      window.alert(err && err.error ? errorText(err.error) : 'No connection. This needs signal: try again when you have signal.');
+      return false;
+    }).then(function (ok) {
+      state.reviewing = false;
+      render();
+      if (ok) sync();
+      return ok;
+    });
   }
 
   function stockAt(s, itemId, loc) {
@@ -1174,6 +1314,31 @@
       state.profile = null;
       save('profile', null);
       render();
+    } else if (act === 'dash') {
+      state.prefs.dash = t.getAttribute('data-dash');
+      save('prefs', state.prefs);
+      render();
+      window.scrollTo(0, 0);
+    } else if (act === 'reject') {
+      var key = t.getAttribute('data-key');
+      var why = window.prompt('Reject this entry?\n\n' + entryText(key) + '\n\nIt stays in the sheet but is left out of stock and reports. ' +
+        'You can restore it later.\n\nWhy is it wrong?', '');
+      if (why === null) return;
+      if (!why.trim()) { window.alert('Write why it is wrong, so others understand.'); return; }
+      review(key, 'reject', why.trim());
+    } else if (act === 'restore') {
+      if (!window.confirm('Put this entry back into the stock?\n\n' + entryText(t.getAttribute('data-key')))) return;
+      review(t.getAttribute('data-key'), 'restore', '');
+    } else if (act === 'keep') {
+      review(t.getAttribute('data-key'), 'keep', 'both are right');
+    } else if (act === 'never-came') {
+      var why2 = window.prompt('This delivery never came?\n\n' + entryText(t.getAttribute('data-key')) + '\n\nIt will be taken off the record. ' +
+        'The sender and the manager will see your reason.\n\nWhat happened?', 'Never came');
+      if (why2 === null) return;
+      if (!why2.trim()) { window.alert('Write what happened, so others understand.'); return; }
+      review(t.getAttribute('data-key'), 'reject', why2.trim()).then(function (ok) {
+        if (ok) { state.view = null; state.receiving = null; render(); }
+      });
     } else if (act === 'clear-rejected') {
       state.rejected = [];
       save('rejected', []);

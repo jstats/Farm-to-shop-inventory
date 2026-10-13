@@ -386,7 +386,122 @@
     return hit ? { batch: hit.batch, at: hit.at } : null;
   }
 
+  // ---------- rejected entries and checks ----------
+  /** An entry is everything saved together: one delivery (with its confirmation), one count, one packing… */
+  function entryKey(m) {
+    return String(m.batch || m.id || '');
+  }
+
+  /**
+   * Rejection rows { key, action: 'reject' | 'restore' | 'keep', reason, by, at }. The latest reject or restore
+   * per key wins; 'keep' only says "two look alike but both are right". Returns { key: row } of entries rejected now.
+   */
+  function rejectedKeys(rejections) {
+    var last = {};
+    sortByAt(rejections || []).forEach(function (r) {
+      if (r.action === 'reject' || r.action === 'restore') last[r.key] = r;
+    });
+    var out = {};
+    Object.keys(last).forEach(function (k) { if (last[k].action === 'reject') out[k] = last[k]; });
+    return out;
+  }
+
+  function withoutRejected(movements, rejections) {
+    var gone = rejectedKeys(rejections);
+    return movements.filter(function (m) { return !gone[entryKey(m)]; });
+  }
+
+  function sortByAt(rows) {
+    return rows.slice().sort(function (a, b) { return String(a.at || '') < String(b.at || '') ? -1 : String(a.at || '') > String(b.at || '') ? 1 : 0; });
+  }
+
+  /**
+   * Movements grouped into entries, newest first: { key, type, date, at, worker, from, to, lines, received }.
+   * A delivery's confirmation shares its batch, so it rides on the delivery as `received` ({ by, at, lines }).
+   */
+  function entries(movements) {
+    var groups = {}, order = [];
+    movements.forEach(function (m) {
+      var k = entryKey(m);
+      if (!k) return;
+      var g = groups[k];
+      if (!g) { g = groups[k] = { key: k, type: '', date: m.date, at: m.at, worker: m.worker, from: '', to: '', lines: [], received: null }; order.push(k); }
+      if (m.type === 'receive') {
+        g.received = g.received || { by: m.worker, at: m.at, lines: [] };
+        g.received.lines.push(m);
+        return;
+      }
+      if (!g.type) { g.type = m.type; g.date = m.date; g.at = m.at; g.worker = m.worker; }
+      g.lines.push(m);
+      if (m.from && !g.from) g.from = m.from;
+      if (m.to && !g.to) g.to = m.to;
+    });
+    return order.map(function (k) { return groups[k]; }).filter(function (g) { return g.type; }).sort(function (a, b) {
+      if (a.date !== b.date) return a.date < b.date ? 1 : -1;
+      return String(a.at || '') < String(b.at || '') ? 1 : -1;
+    });
+  }
+
+  /**
+   * Entries that probably need a manager's look, at `today`:
+   *   negative – an item below zero at a place (with the latest entries that touched it there)
+   *   twice    – two entries of the same type, places and quantities, captured within 24 hours of each other
+   *              (sales only when the same person saved them within 10 minutes: equal sales on one day are normal)
+   *   late     – a delivery not confirmed `lateDays` (3) or more days after it was sent
+   * `rejections` are left out first; a pair someone marked 'keep' is not raised again.
+   */
+  function checks(movements, rejections, today, lateDays) {
+    var live = withoutRejected(movements, rejections);
+    var es = entries(live);
+    var byKey = {};
+    es.forEach(function (e) { byKey[e.key] = e; });
+    var keptPairs = {};
+    (rejections || []).forEach(function (r) { if (r.action === 'keep') keptPairs[r.key] = true; });
+    var out = [];
+
+    var bal = replay(live).balance;
+    Object.keys(bal).forEach(function (itemId) {
+      Object.keys(bal[itemId]).forEach(function (place) {
+        var q = bal[itemId][place];
+        if (q > -1e-9) return;
+        var touched = es.filter(function (e) {
+          return e.lines.concat(e.received ? e.received.lines : []).some(function (m) {
+            return m.itemId === itemId && (m.from === place || m.to === place);
+          });
+        }).slice(0, 5);
+        out.push({ kind: 'negative', itemId: itemId, place: place, qty: Math.round(q * 100) / 100, entries: touched });
+      });
+    });
+
+    var sig = function (e) {
+      return e.type + '#' + e.lines.map(function (m) {
+        return [m.itemId, num(m.qty), m.from || '', m.to || '', m.source || ''].join(':');
+      }).sort().join('|');
+    };
+    var bySig = {};
+    es.forEach(function (e) { (bySig[sig(e)] = bySig[sig(e)] || []).push(e); });
+    Object.keys(bySig).forEach(function (s) {
+      var list = sortByAt(bySig[s]);
+      for (var i = 1; i < list.length; i++) {
+        var a = list[i - 1], b = list[i];
+        var gap = Date.parse(b.at) - Date.parse(a.at);
+        var limit = a.type === 'sale' ? (a.worker === b.worker ? 10 * 60e3 : -1) : 24 * 3600e3;
+        if (!isFinite(gap) || gap > limit || keptPairs[a.key + '|' + b.key]) continue;
+        out.push({ kind: 'twice', key: a.key + '|' + b.key, entries: [b, a] });
+      }
+    });
+
+    var p = today.split('-').map(Number);
+    var cutoff = new Date(Date.UTC(p[0], p[1] - 1, p[2] - (lateDays || 3))).toISOString().slice(0, 10);
+    pendingDeliveries(live, [], today, 60).forEach(function (d) {
+      if (d.date > cutoff || !byKey[d.batch]) return;
+      out.push({ kind: 'late', key: d.batch, days: Math.round((Date.parse(today) - Date.parse(d.date)) / 864e5), entries: [byKey[d.batch]] });
+    });
+    return out;
+  }
+
   return { TYPES: TYPES, kept: kept, replay: replay, flow: flow, flowKg: flowKg, pendingDeliveries: pendingDeliveries, summarise: summarise, onHand: onHand, monthsBack: monthsBack, sortMovements: sortMovements,
            soldOn: soldOn, daysLeftInMonth: daysLeftInMonth, countWindow: countWindow, countedSince: countedSince,
-           everCounted: everCounted, recentDuplicate: recentDuplicate };
+           everCounted: everCounted, recentDuplicate: recentDuplicate,
+           entryKey: entryKey, rejectedKeys: rejectedKeys, withoutRejected: withoutRejected, entries: entries, checks: checks };
 });

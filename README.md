@@ -81,11 +81,27 @@ entry, so you can tell who did what. The worker's name comes from the sheet, nev
 
 ## The dashboard
 
-- Sales this month (KSh and units), split by shop, and a 12-month sales chart
-- Stock at the farm and each shop, plus the stock value at selling price
-- Low stock: any shop at or below an item's reorder level, and how many the farm has to send
-- Monthly count status for each place, and the count differences (stock that went missing)
-- Best sellers this month and the latest activity, with who recorded it
+Five short tabs (the last one used is remembered):
+
+- **Overview:** sales this month, units, stock value and low items; a red "entries to check" banner when something looks
+  wrong; the top low items, deliveries waiting, counts due, and the latest 5 entries
+- **Sales:** the 12-month chart, this month by place, best sellers and losses
+- **Stock:** stock at the farm and each shop, all low items, month-end count status and count differences
+- **Honey:** honey in (harvest and bought), honey flow per place in kg, and empty jars and bottles
+- **Entries:** *Check these entries*, the latest 15 entries and the rejected ones
+
+**Rejecting a wrong entry.** Never delete rows in the sheet. A manager presses **Reject** on the entry (in *Entries*),
+says why, and the entry stays in the sheet but is left out of stock, the dashboard, reports and reminders. **Restore**
+puts it back. An entry is everything saved together: a whole delivery with its confirmation, a whole count, a whole
+packing. *Check these entries* lists what probably needs it:
+
+- an item below zero at a place, with the latest entries that touched it there
+- the same entry saved twice within a day (sales only when the same person saved them within 10 minutes);
+  **Both are right** clears it
+- a delivery not confirmed after 3 days
+
+A shop worker can also mark a delivery **never came** on the delivery card (for one sent by mistake or twice).
+Rejections are kept in the `rejections` tab: what, who, when and why.
 
 ## Items
 
@@ -129,8 +145,8 @@ its way before counting the shop it is going to.
 
 ## Good to know
 
-- **Mistakes:** don't edit or delete rows in `movements`. If a number was wrong, the next count corrects the stock.
-  If a whole entry was wrong, you can delete that row in the sheet; the change shows on the next refresh.
+- **Mistakes:** don't edit or delete rows in `movements`; reject the wrong entry in the app (see *The dashboard*). If only a number was off,
+  the next count corrects the stock.
 - **Starting over:** rename the `movements` tab (for example *movements-test october*, as done on 12 Oct 2026) and add a
   new empty tab named exactly `movements`. The app writes the column headings with the first entry. Check first that no
   phone has entries waiting to send, then do an opening Stock count at every place.

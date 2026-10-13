@@ -516,3 +516,55 @@ test('equipment restocks have no source; only bulk honey says harvest or bought'
   assert.match(mail.html, /Honey in: our harvest and bought from farmers/);
   assert.match(mail.html, /Other stock restocked/);
 });
+
+test('review: a manager rejects and restores an entry; it leaves reports and reminders while rejected', () => {
+  const env = withPlaces(load());
+  const m = (id, extra) => ({ id, date: '2026-10-01', price: 0, at: '2026-10-01T10:00:00Z', from: '', to: '', ...extra });
+  env.post({ action: 'save', ...mwende, movements: [
+    m('s1', { type: 'sale', itemId: 'honey-1kg', qty: 2, from: 'kiunduani', price: 1000, batch: 'S1' }),
+    m('s2', { type: 'sale', itemId: 'honey-1kg', qty: 3, from: 'kiunduani', price: 1000, batch: 'S2' }),
+  ] });
+  const total = () => env.ctx.report_('week', { start: '2026-09-28', end: '2026-10-04' }, '2026-10-05').total;
+  assert.equal(total(), 5000);
+  assert.equal(env.post({ action: 'review', ...mwende, key: 'S2', decision: 'reject' }).error, 'reason_needed');
+  assert.equal(env.post({ action: 'review', ...mwende, key: 'nope', decision: 'reject', reason: 'x' }).error, 'not_found');
+  assert.equal(env.post({ action: 'review', ...mwende, key: 'S2', decision: 'delete', reason: 'x' }).error, 'invalid');
+  const r = env.post({ action: 'review', ...mwende, key: 'S2', decision: 'reject', reason: 'saved twice' });
+  assert.equal(r.ok, true);
+  assert.deepEqual(r.rejections.map((x) => [x.key, x.action, x.reason, x.by]), [['S2', 'reject', 'saved twice', 'Mwende Musyoka']]);
+  assert.equal(total(), 2000);
+  // The rows stay in the sheet and still reach the app, with the rejection beside them.
+  const data = env.post({ action: 'data', ...mwende });
+  assert.equal(data.movements.length, 2);
+  assert.equal(data.rejections.length, 1);
+  assert.equal(env.post({ action: 'review', ...mwende, key: 'S2', decision: 'restore' }).ok, true);
+  assert.equal(total(), 5000);
+});
+
+test('review: a worker may only reject an unconfirmed delivery to their own place', () => {
+  const env = withPlaces(load());
+  const m = (id, extra) => ({ id, date: '2026-10-05', price: 0, at: '2026-10-05T10:00:00Z', from: '', to: '', ...extra });
+  env.post({ action: 'save', ...mwende, movements: [
+    m('t1', { type: 'transfer', itemId: 'honey-1kg', qty: 21, from: 'farm', to: 'kiunduani', batch: 'D1' }),
+    m('t2', { type: 'transfer', itemId: 'honey-1kg', qty: 5, from: 'farm', to: 'nairobi', batch: 'D2' }),
+    m('t3', { type: 'transfer', itemId: 'honey-1kg', qty: 4, from: 'farm', to: 'kiunduani', batch: 'D3' }),
+    m('r3', { type: 'receive', itemId: 'honey-1kg', qty: 4, from: 'farm', to: 'kiunduani', batch: 'D3', sent: 4 }),
+    m('s1', { type: 'sale', itemId: 'honey-1kg', qty: 1, from: 'kiunduani', price: 1000, batch: 'S1' }),
+  ] });
+  const kal = { name: 'Kalondu', pin: '2222' };
+  const ask = (key) => env.post({ action: 'review', ...kal, key, decision: 'reject', reason: 'never sent' });
+  assert.equal(ask('D2').error, 'not_allowed');   // to Nairobi, not her place
+  assert.equal(ask('D3').error, 'not_allowed');   // already confirmed
+  assert.equal(ask('S1').error, 'not_allowed');   // not a delivery
+  assert.equal(env.post({ action: 'review', ...kal, key: 'D1', decision: 'restore' }).error, 'not_allowed');
+  assert.equal(ask('D1').ok, true);
+  assert.deepEqual(env.sheets.rejections.rows.slice(1).map((r) => [r[0], r[1], r[3]]), [['D1', 'reject', 'Kalondu']]);
+});
+
+test('review: keep marks two look-alike entries as both right', () => {
+  const env = withPlaces(load());
+  const m = (id, batch) => ({ id, batch, date: '2026-10-05', price: 0, at: '2026-10-05T10:00:00Z', from: '', to: 'farm', type: 'restock', itemId: 'matoke', qty: 9 });
+  env.post({ action: 'save', ...mwende, movements: [m('a', 'A'), m('b', 'B')] });
+  assert.equal(env.post({ action: 'review', ...mwende, key: 'A|B', decision: 'keep' }).ok, true);
+  assert.equal(env.post({ action: 'review', ...mwende, key: 'A|Z', decision: 'keep' }).error, 'not_found');
+});

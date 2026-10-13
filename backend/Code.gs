@@ -18,6 +18,9 @@
  *                losses say reason = spoilt / died / broken / stolen / other. Lines saved together share a batch:
  *                a delivery (transfer) is confirmed by receive lines with the same batch (qty arrived of sent);
  *                a packing (pack) takes kg from bulk honey (from) and adds jars/bottles (to).
+ *   rejections – entries a manager rejected (or restored) in the app, instead of deleting rows. key = the entry's
+ *                batch (or movementId); the latest reject/restore for a key wins, and rejected entries are left out
+ *                of stock, reports and reminders. 'keep' marks two look-alike entries as both right.
  *
  * Every request carries the worker's name and PIN. The worker recorded on a movement is the signed-in
  * worker, never a name the phone sends. After MAX_FAILS wrong PINs a name is locked for LOCK_MINUTES.
@@ -45,7 +48,9 @@ var TABS = {
   workers:   ['name', 'pin', 'active', 'email', 'place', 'role'],
   movements: ['movementId', 'date', 'type', 'itemId', 'itemName', 'qty', 'unit', 'from', 'to', 'price', 'amount',
               'worker', 'note', 'at', 'receivedAt', 'source', 'supplier', 'cost', 'reason', 'batch', 'sent'],
+  rejections: ['key', 'action', 'reason', 'by', 'at'],
 };
+var REVIEW_ACTIONS = ['reject', 'restore', 'keep'];
 
 // From beelovefarm.org/shop/beekeeping (October 2026), plus farm produce, livestock and fish (prices to be set in the sheet).
 // reorderLevel = warn when a shop (or, for Packaging, the farm) has this many or fewer. Then places (where it is kept)
@@ -271,7 +276,61 @@ function data_() {
                source: String(r.source || ''), supplier: String(r.supplier || ''), cost: Number(r.cost) || 0, reason: String(r.reason || ''),
                batch: String(r.batch || ''), sent: Number(r.sent) || 0 };
     }),
+    rejections: rejections_(),
   };
+}
+
+function rejections_() {
+  return rows_('rejections').filter(function (r) { return r.key; }).map(function (r) {
+    return { key: String(r.key), action: String(r.action), reason: String(r.reason || ''), by: String(r.by || ''),
+             at: r.at instanceof Date ? r.at.toISOString() : String(r.at || '') };
+  });
+}
+
+/** Keys of the entries rejected now: the latest reject or restore per key wins (same rule as docs/stock.js). */
+function rejectedKeys_() {
+  var last = {};
+  rejections_().sort(function (a, b) { return a.at < b.at ? -1 : a.at > b.at ? 1 : 0; }).forEach(function (r) {
+    if (r.action === 'reject' || r.action === 'restore') last[r.key] = r.action;
+  });
+  var out = {};
+  Object.keys(last).forEach(function (k) { if (last[k] === 'reject') out[k] = true; });
+  return out;
+}
+
+/** Movement rows that still count: rejected entries left out. */
+function liveMovementRows_() {
+  var gone = rejectedKeys_();
+  return rows_('movements').filter(function (r) { return r.movementId && !gone[String(r.batch || r.movementId)]; });
+}
+
+/**
+ * A manager rejects, restores or keeps an entry; anyone may reject a delivery sent to one of their places that has
+ * not been confirmed (it never came). The reason is required for a reject. Returns { ok, rejections } or { ok:false, error }.
+ */
+function review_(who, body) {
+  var key = String(body.key || '').slice(0, 200);
+  var action = String(body.decision || '');
+  var reason = String(body.reason || '').trim().slice(0, 300);
+  if (!key || REVIEW_ACTIONS.indexOf(action) < 0) return { ok: false, error: 'invalid' };
+  if (action === 'reject' && !reason) return { ok: false, error: 'reason_needed' };
+  var moves = rows_('movements').filter(function (r) { return r.movementId; });
+  var parts = action === 'keep' ? key.split('|') : [key];
+  var known = parts.every(function (k) { return moves.some(function (r) { return String(r.batch || r.movementId) === k; }); });
+  if (!known) return { ok: false, error: 'not_found' };
+  if (!who.manager) {
+    var mine = moves.filter(function (r) { return String(r.batch) === key; });
+    var delivery = action === 'reject' && mine.length && mine.every(function (r) {
+      return (String(r.type) === 'transfer' && who.places.indexOf(String(r.to)) >= 0) || String(r.type) === 'receive';
+    }) && mine.some(function (r) { return String(r.type) === 'transfer'; }) && !mine.some(function (r) { return String(r.type) === 'receive'; });
+    if (!delivery) return { ok: false, error: 'not_allowed' };
+  }
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var sh = ss.getSheetByName('rejections') || ss.insertSheet('rejections');
+  var head = headers_(sh, TABS.rejections);
+  var v = { key: key, action: action, reason: reason, by: who.name, at: new Date().toISOString() };
+  sh.getRange(sh.getLastRow() + 1, 1, 1, head.length).setValues([head.map(function (h) { return v.hasOwnProperty(h) ? v[h] : ''; })]);
+  return { ok: true, rejections: rejections_() };
 }
 
 function doGet() {
@@ -282,6 +341,7 @@ function doGet() {
  * Everything is a POST so the PIN never sits in a URL.
  *   {action: 'data', name, pin}                → items, locations and all movements
  *   {action: 'save', name, pin, movements: []} → appends new movements; safe to repeat (known movementIds are skipped)
+ *   {action: 'review', name, pin, key, decision: 'reject'|'restore'|'keep', reason} → records a review (see review_)
  */
 function doPost(e) {
   var body;
@@ -301,6 +361,11 @@ function doPost(e) {
     out.places = who.places;
     out.role = who.manager ? 'manager' : '';
     return json_(out);
+  }
+  if (body.action === 'review') {
+    var rlock = LockService.getScriptLock();
+    rlock.waitLock(20000);
+    try { return json_(review_(who, body)); } finally { rlock.releaseLock(); }
   }
 
   var lock = LockService.getScriptLock();
@@ -409,7 +474,7 @@ function reminders_(now) {
   var monthName = Utilities.formatDate(now, TZ, 'MMMM');
   var dayName = Utilities.formatDate(now, TZ, 'd MMM');
 
-  var moves = rows_('movements').filter(function (r) { return r.movementId; });
+  var moves = liveMovementRows_();
   if (!moves.length) return [];  // not in use yet
   var locs = rows_('locations').filter(function (r) { return r.locationId; });
   var workers = rows_('workers').filter(function (w) { return yes_(w.active); }).map(function (w) {
@@ -491,7 +556,7 @@ function monthBefore_(today) {
 }
 
 function movements_() {
-  return rows_('movements').filter(function (r) { return r.movementId; }).map(function (r) {
+  return liveMovementRows_().map(function (r) {
     return { id: String(r.movementId), date: date_(r.date), type: String(r.type), itemId: String(r.itemId), qty: Number(r.qty) || 0,
              from: String(r.from || ''), to: String(r.to || ''), price: Number(r.price) || 0, worker: String(r.worker),
              at: r.at instanceof Date ? r.at.toISOString() : String(r.at || ''),

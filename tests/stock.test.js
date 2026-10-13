@@ -209,3 +209,63 @@ test('recentDuplicate: the same entry saved twice within minutes (the 9 Oct doub
   // a line saved in the same batch is not compared with itself
   assert.equal(Stock.recentDuplicate(first, first, 'Daniel', '2026-10-09T18:10:00Z', 10), null);
 });
+
+// The 13 Oct 2026 entries: two deliveries Kiunduani → Nairobi where only one was real, and one packing saved twice.
+const oct13 = () => {
+  const m = (id, batch, date, type, itemId, qty, from, to, worker, at, extra = {}) =>
+    Object.assign({ id, batch, date, type, itemId, qty, from, to, price: 0, worker, at }, extra);
+  return [
+    m('c1', 'cnt', '2026-10-05', 'count', 'j1', 24, '', 'kiunduani', 'Jonesmus', '2026-10-13T04:54:39Z'),
+    m('c2', 'cnt', '2026-10-05', 'count', 'bulk', 300, '', 'farm', 'Jonesmus', '2026-10-13T04:54:39Z'),
+    m('p1', 'packD', '2026-10-06', 'pack', 'bulk', 23, 'farm', '', 'Daniel', '2026-10-13T04:44:52Z'),
+    m('p2', 'packD', '2026-10-06', 'pack', 'j1', 21, '', 'farm', 'Daniel', '2026-10-13T04:44:52Z'),
+    m('t1', 'toKiu', '2026-10-11', 'transfer', 'j1', 21, 'farm', 'kiunduani', 'Jonesmus', '2026-10-13T10:30:59Z'),
+    m('r1', 'toKiu', '2026-10-13', 'receive', 'j1', 21, 'farm', 'kiunduani', 'Jonesmus', '2026-10-13T11:28:05Z', { sent: 21 }),
+    m('p3', 'packJ', '2026-10-13', 'pack', 'bulk', 23, 'farm', '', 'Jonesmus', '2026-10-13T10:30:15Z'),
+    m('p4', 'packJ', '2026-10-13', 'pack', 'j1', 21, '', 'farm', 'Jonesmus', '2026-10-13T10:30:15Z'),
+    m('t2', 'first21', '2026-10-13', 'transfer', 'j1', 21, 'kiunduani', 'nairobi', 'Daniel', '2026-10-13T04:49:40Z'),
+    m('t3', 'real44', '2026-10-13', 'transfer', 'j1', 44, 'kiunduani', 'nairobi', 'Daniel', '2026-10-13T04:58:28Z'),
+    m('r2', 'real44', '2026-10-13', 'receive', 'j1', 44, 'kiunduani', 'nairobi', 'Jonesmus', '2026-10-13T11:41:32Z', { sent: 44 }),
+  ];
+};
+
+test('entries group a delivery with its confirmation, newest first', () => {
+  const es = Stock.entries(oct13());
+  const real = es.find((e) => e.key === 'real44');
+  assert.equal(real.type, 'transfer');
+  assert.equal(real.from, 'kiunduani');
+  assert.equal(real.to, 'nairobi');
+  assert.equal(real.received.by, 'Jonesmus');
+  assert.equal(es.find((e) => e.key === 'packD').lines.length, 2);
+  assert.equal(es[0].date, '2026-10-13');
+  assert.equal(es.at(-1).key, 'cnt');
+});
+
+test('checks find the October mistakes: Kiunduani below zero, a packing saved twice, a late delivery', () => {
+  const c = Stock.checks(oct13(), [], '2026-10-13');
+  const neg = c.filter((x) => x.kind === 'negative');
+  assert.deepEqual(neg.map((x) => [x.itemId, x.place, x.qty]), [['j1', 'kiunduani', -20]]);
+  assert.ok(neg[0].entries.some((e) => e.key === 'first21'));
+  const twice = c.filter((x) => x.kind === 'twice');
+  assert.deepEqual(twice.map((x) => x.key), ['packD|packJ']);
+  assert.equal(c.filter((x) => x.kind === 'late').length, 0);  // sent today
+  const later = Stock.checks(oct13(), [], '2026-10-17');
+  assert.deepEqual(later.filter((x) => x.kind === 'late').map((x) => [x.key, x.days]), [['first21', 4]]);
+});
+
+test('a rejected entry leaves the stock maths; restoring brings it back; keep silences a pair', () => {
+  const rej = [{ key: 'first21', action: 'reject', reason: 'never sent', by: 'Jonesmus', at: '2026-10-13T15:00:00Z' }];
+  const live = Stock.withoutRejected(oct13(), rej);
+  assert.equal(Stock.onHand(live, 'j1', 'kiunduani'), 1);
+  assert.equal(Stock.onHand(live, 'j1', 'nairobi'), 44);
+  assert.equal(Stock.checks(oct13(), rej, '2026-10-17').filter((x) => x.kind !== 'twice').length, 0);
+  const back = rej.concat([{ key: 'first21', action: 'restore', reason: '', by: 'Jonesmus', at: '2026-10-13T15:05:00Z' }]);
+  assert.deepEqual(Object.keys(Stock.rejectedKeys(back)), []);
+  assert.equal(Stock.onHand(Stock.withoutRejected(oct13(), back), 'j1', 'kiunduani'), -20);
+  const keep = [{ key: 'packD|packJ', action: 'keep', reason: '', by: 'Jonesmus', at: '2026-10-13T15:10:00Z' }];
+  assert.equal(Stock.checks(oct13(), keep, '2026-10-13').filter((x) => x.kind === 'twice').length, 0);
+  // rejecting the second packing instead puts the farm's bulk honey and jars right
+  const noDup = Stock.withoutRejected(oct13(), [{ key: 'packJ', action: 'reject', reason: 'same packing', by: 'Jonesmus', at: '2026-10-13T15:20:00Z' }]);
+  assert.equal(Stock.onHand(noDup, 'bulk', 'farm'), 277);
+  assert.equal(Stock.onHand(noDup, 'j1', 'farm'), 0);
+});

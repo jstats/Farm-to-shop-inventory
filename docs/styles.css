@@ -220,3 +220,38 @@ table.flow th { font-size: 0.66rem; letter-spacing: 0.02em; }
 /* Send stock: the From → To line, red when both are the same place */
 .route { margin: 0 0 12px; padding: 10px 12px; border-radius: 12px; background: var(--accent-tint); font-size: 1.1rem; text-align: center; }
 .route.same { background: var(--bad-tint); color: var(--bad); }
+
+/* Checking entries: the dashboard's "Check these entries", Reject / Restore, and rejected rows */
+.check-card { background: var(--warn-tint); border: 1px solid var(--warn); border-radius: var(--radius); padding: 12px 14px; margin: 0 0 12px; }
+.check-card > p { margin: 0 0 8px; line-height: 1.4; }
+.check-card .list { margin-bottom: 8px; }
+.btn.small { width: auto; min-height: 0; padding: 6px 12px; font-size: 0.88rem; flex: 0 0 auto; align-self: center; }
+li.rejected { opacity: 0.7; }
+li.rejected b { text-decoration: line-through; }
+.reject-note { color: var(--bad); }
+.never-box { margin: 16px 0 0; padding: 12px 14px; border: 1px dashed var(--line-strong); border-radius: var(--radius); }
+.never-box p { margin: 0 0 8px; }
+
+/* Dashboard tabs: Overview · Sales · Stock · Honey · Entries */
+.dash-tabs {
+  display: grid; grid-template-columns: repeat(5, 1fr); gap: 4px; margin: 4px 0 8px; padding: 4px;
+  background: var(--card); border: 1px solid var(--line); border-radius: 14px;
+}
+.dash-tabs button {
+  position: relative; display: flex; align-items: center; justify-content: center; min-height: 40px; padding: 6px 2px;
+  border-radius: 10px; border: 0; background: none; color: var(--ink);
+  font: inherit; font-size: 0.86rem; font-weight: 600; cursor: pointer;
+}
+.dash-tabs button[aria-selected="true"] { background: var(--accent); border-color: var(--accent); color: #fff; }
+.dash-tabs .badge {
+  position: absolute; top: -6px; right: -2px; min-width: 18px; padding: 0 5px; border-radius: 999px;
+  background: #C0392B; color: #fff; font-size: 0.7rem; line-height: 18px; text-align: center;
+}
+.dash-body > h2:first-child { margin-top: 12px; }
+.check-banner {
+  display: flex; align-items: center; gap: 12px; width: 100%; margin: 8px 0 14px; padding: 12px 14px; text-align: left;
+  background: var(--bad-tint); color: var(--bad); border: 1px solid var(--bad); border-radius: var(--radius); font: inherit; cursor: pointer;
+}
+.check-banner .grow { flex: 1; }
+.check-banner b { color: var(--bad); }
+.see-more { margin: 4px 0 0; text-align: right; }
