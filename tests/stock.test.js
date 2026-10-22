@@ -110,6 +110,22 @@ test('countWindow: last 3 days of a month, then the first 3 of the next (late)',
   assert.equal(Stock.countedSince(ms, 'nairobi', '2026-10-29'), true);
 });
 
+test('countMissing: a month-end count is done only when every item kept there has a number', () => {
+  const items = [
+    { id: 'jar', unit: 'jar', places: [] },
+    { id: 'hive', unit: 'hive', places: ['kiunduani', 'nairobi'] },
+    { id: 'bulk', unit: 'kg', places: ['farm'] },
+    { id: 'old', unit: 'jar', places: [], active: false },
+  ];
+  const ms = [mv('2026-10-30', 'count', 'jar', 5, '', 'nairobi')];
+  assert.deepEqual(Stock.countMissing(ms, items, 'nairobi', '2026-10-29').map((i) => i.id), ['hive']); // one of two: not done
+  ms.push(mv('2026-10-31', 'count', 'hive', 0, '', 'nairobi')); // 0 counts as counted
+  assert.deepEqual(Stock.countMissing(ms, items, 'nairobi', '2026-10-29'), []);
+  assert.deepEqual(Stock.countMissing(ms, items, 'farm', '2026-10-29').map((i) => i.id), ['jar', 'bulk']);
+  assert.equal(Stock.wholeUnits(items[0]), true);
+  assert.equal(Stock.wholeUnits(items[2]), false);
+});
+
 test('packing turns kg of bulk honey into jars', () => {
   const r = Stock.replay([
     mv('2026-10-01', 'restock', 'bulk', 50, '', 'farm'),
@@ -127,7 +143,10 @@ test('a delivery confirmed short takes the shortfall off the shop', () => {
   const ms = [mv('2026-10-01', 'restock', 'jar', 100, '', 'farm'), t('jar', 50), t('hive', 2)];
   assert.equal(Stock.pendingDeliveries(ms, ['kiunduani'], '2026-10-04').length, 1);
   assert.equal(Stock.pendingDeliveries(ms, ['nairobi'], '2026-10-04').length, 0);
-  assert.equal(Stock.pendingDeliveries(ms, [], '2026-10-30').length, 0); // older than 14 days
+  // An unconfirmed delivery never drops off, however old; it carries its age in days.
+  assert.equal(Stock.pendingDeliveries(ms, [], '2026-10-30').length, 1);
+  assert.equal(Stock.pendingDeliveries(ms, [], '2026-10-30')[0].age, 27);
+  assert.equal(Stock.pendingDeliveries(ms, [], '2026-10-30', 14).length, 0); // only when a limit is asked for
   ms.push(Object.assign(mv('2026-10-04', 'receive', 'jar', 48, 'farm', 'kiunduani'), { batch: 'd1', sent: 50 }));
   ms.push(Object.assign(mv('2026-10-04', 'receive', 'hive', 2, 'farm', 'kiunduani'), { batch: 'd1', sent: 2 }));
   assert.equal(Stock.pendingDeliveries(ms, ['kiunduani'], '2026-10-04').length, 0);

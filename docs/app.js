@@ -30,10 +30,14 @@
       return fallback;
     }
   }
+  /** Returns false if the phone would not store it (private mode, storage full): the app keeps going in memory. */
   function save(k, v) {
     try {
       localStorage.setItem(KEY + k, JSON.stringify(v));
-    } catch (e) { /* keep going in memory */ }
+      return true;
+    } catch (e) {
+      return false;
+    }
   }
 
   var state = {
@@ -45,6 +49,7 @@
     tab: 'home',
     view: null, // form type when filling a form, 'done' after saving
     syncing: false,
+    storageError: false, // the phone refused to store the queue: entries are only in memory until sent
     online: navigator.onLine !== false,
     authError: false,
     lastError: '',
@@ -100,6 +105,23 @@
   }
   function rejections() { return (state.data && state.data.rejections) || []; }
 
+  // ---------- whose entries ----------
+  function sameName(a, b) { return String(a || '').trim().toLowerCase() === String(b || '').trim().toLowerCase(); }
+  /**
+   * Entries go to the sheet under the name of the person who made them. After someone else signs in on the same phone,
+   * the first person's waiting entries stay here until they (or a manager) sign in, so they are never sent as someone else's.
+   */
+  function mayGoNow(m) { return isManager() || !m.worker || sameName(m.worker, state.profile.name); }
+  function othersWaiting() {
+    return state.profile ? state.queue.filter(function (m) { return !mayGoNow(m); }) : [];
+  }
+  function myWaiting() {
+    return state.profile ? state.queue.filter(mayGoNow) : [];
+  }
+  function saveQueue() {
+    state.storageError = !save('queue', state.queue);
+  }
+
   // ---------- backend ----------
   function api(body) {
     body.name = state.profile && state.profile.name;
@@ -139,7 +161,7 @@
     if (state.syncing) return Promise.resolve();
     state.syncing = true;
     paintSync();
-    var sending = state.queue.slice();
+    var sending = state.queue.filter(mayGoNow);
     var step = sending.length ? api({ action: 'save', movements: sending }) : Promise.resolve({ ok: true, saved: [], rejected: [] });
     return step.then(function (res) {
       if (!res.ok) throw res;
@@ -154,7 +176,7 @@
       }
       // Keep entries made while this request was in flight.
       state.queue = state.queue.filter(function (m) { return !done[m.id]; });
-      save('queue', state.queue);
+      saveQueue();
       return api({ action: 'data' });
     }).then(function (res) {
       if (!res.ok) throw res;
@@ -183,7 +205,7 @@
     if (!state.profile) { el.textContent = ''; return; }
     if (DEMO) { el.textContent = 'Demo'; return; }
     if (state.syncing) el.textContent = 'Sending…';
-    else if (state.queue.length) el.textContent = state.queue.length + ' waiting for signal';
+    else if (myWaiting().length) el.textContent = myWaiting().length + ' waiting for signal';
     else el.textContent = 'All sent ✓';
   }
 
@@ -203,6 +225,16 @@
     if (state.authError) {
       html += '<div class="banner bad">Your name or PIN no longer works, so entries are not being sent. ' +
         '<button data-act="resign">Sign in again</button></div>';
+    }
+    if (state.storageError && state.queue.length) {
+      html += '<div class="banner bad">⚠️ This phone did not store your entries (storage full or private browsing). ' +
+        'Keep the app open until they are sent, or free some space on the phone.</div>';
+    }
+    var others = othersWaiting();
+    if (others.length) {
+      var names = others.map(function (m) { return m.worker; }).filter(function (n, i, a) { return a.indexOf(n) === i; });
+      html += '<div class="banner info">' + others.length + ' entr' + (others.length === 1 ? 'y' : 'ies') + ' by ' + esc(names.join(', ')) +
+        ' wait on this phone. They are sent when ' + (names.length === 1 ? esc(names[0].split(' ')[0]) : 'they') + ' or a manager signs in here.</div>';
     }
     if (state.rejected.length) {
       html += '<div class="banner bad">' + state.rejected.length + ' entr' + (state.rejected.length === 1 ? 'y was' : 'ies were') +
@@ -320,16 +352,20 @@
       var n = d.lines.reduce(function (t, x) { return t + x.qty; }, 0);
       out.push({ form: 'receive', place: d.to, batch: d.batch, ico: '📥', title: 'Delivery from ' + locName(d.from),
         text: d.worker + ' sent ' + qty(n) + ' item' + (n === 1 ? '' : 's') + ' to ' + locName(d.to) + ' on ' + niceDate(d.date) +
-          '. Check what arrived and confirm.', button: 'Check delivery' });
+          (d.age >= 2 ? ' (' + d.age + ' days ago)' : '') + '. Check what arrived and confirm.', button: 'Check delivery' });
     });
     var win = Stock.countWindow(today());
     if (win) {
       places.forEach(function (l) {
-        if (Stock.countedSince(mvts, l.id, win.start)) return;
+        var missing = Stock.countMissing(mvts, items(), l.id, win.start);
+        if (!missing.length) return;
+        var started = Stock.countedSince(mvts, l.id, win.start);
         var m = monthName(win.month, true).split(' ')[0];
         out.push({ form: 'count', place: l.id, ico: '📋',
           title: win.late ? m + ' count was missed' : 'Count the stock today',
-          text: win.late ? 'Count everything at ' + l.name + ' now and enter it.'
+          text: started ? missing.length + ' item' + (missing.length === 1 ? ' has' : 's have') + ' no number yet at ' + l.name +
+              ' (for example ' + missing[0].name + '). Type 0 for items that are not there.'
+            : win.late ? 'Count everything at ' + l.name + ' now and enter it.'
             : 'It is the end of ' + m + '. Count everything at ' + l.name + ' and enter it.',
           button: 'Start count' });
       });
@@ -346,6 +382,11 @@
 
   function myPlaces() {
     return (state.profile && state.profile.places) || [];
+  }
+  /** A place that is not one of the worker's own (managers and workers with no place set: never). */
+  function notMine(id) {
+    var mine = myPlaces();
+    return !!id && !isManager() && mine.length > 0 && mine.indexOf(id) < 0;
   }
 
   function reminderCards(list) {
@@ -450,14 +491,14 @@
         locOptions(locations(), fromDef) + '</select></label>' +
         '<label class="field"><span>To (arriving)</span><select name="to"><option value="">Choose…</option>' +
         locOptions(locations(), toDef) + '</select></label></div>' +
-        '<p class="route" id="route"></p>';
+        '<p class="route" id="route"></p>' + checkBox;
     } else if (type === 'sale') {
       var sellAt = sellers.some(function (l) { return l.id === state.prefs.shop; }) ? state.prefs.shop : lastShop;
       where = '<label class="field"><span>Where was it sold?</span><select name="from">' + sellers.map(function (l) {
         return '<option value="' + esc(l.id) + '"' + (l.id === sellAt ? ' selected' : '') + '>' + esc(l.role === 'farm' ? l.name + ' (market)' : l.name) + '</option>';
       }).join('') + '</select></label>' + checkBox;
     } else if (type === 'loss') {
-      where = '<label class="field"><span>Where?</span><select name="from">' + locOptions(locations(), lastPlace) + '</select></label>' +
+      where = '<label class="field"><span>Where?</span><select name="from">' + locOptions(locations(), lastPlace) + '</select></label>' + checkBox +
         '<label class="field"><span>What happened?</span><select name="reason"><option value="">Choose…</option>' +
         LOSS_REASONS.map(function (r) { return '<option value="' + r[0] + '">' + r[1] + '</option>'; }).join('') + '</select></label>';
     } else {
@@ -594,16 +635,17 @@
       }
       var box = $('#place-warn');
       if (!box) return;
-      var at = type === 'sale' ? form.from.value : form.to.value;
-      var html = '';
+      var at = type === 'sale' || type === 'loss' ? form.from.value : form.to.value;
+      var own = type === 'transfer' ? form.from.value : at;
+      var html = notMine(own) ? '⚠️ <b>' + esc(locName(own)) + ' is not your place.</b> Only record here if you are really there.<br>' : '';
       if (type === 'restock' && at && !Stock.everCounted(mvts, at)) {
-        html = '⚠️ <b>' + esc(locName(at)) + ' has not been counted yet.</b> If this stock was already here before today, ' +
+        html += '⚠️ <b>' + esc(locName(at)) + ' has not been counted yet.</b> If this stock was already here before today, ' +
           'it goes in Stock count, not here.<br><button type="button" class="btn secondary" data-form="count" data-place="' + esc(at) + '">Go to Stock count →</button>';
       } else if ((type === 'sale' || type === 'count') && at) {
-        var d = Stock.pendingDeliveries(mvts, [at], today(), 30)[0];
+        var d = Stock.pendingDeliveries(mvts, [at], today())[0];
         if (d) {
           var n = d.lines.reduce(function (t, x) { return t + x.qty; }, 0);
-          html = '📥 <b>A delivery to ' + esc(locName(at)) + ' is not confirmed yet:</b> ' + qty(n) + ' item' + (n === 1 ? '' : 's') +
+          html += '📥 <b>A delivery to ' + esc(locName(at)) + ' is not confirmed yet:</b> ' + qty(n) + ' item' + (n === 1 ? '' : 's') +
             ' from ' + esc(locName(d.from)) + ', sent ' + esc(niceDate(d.date)) + ' by ' + esc(d.worker) + '. Confirm it first, so the stock is right.' +
             '<br><button type="button" class="btn" data-form="receive" data-place="' + esc(d.to) + '" data-batch="' + esc(d.batch) + '">Check delivery →</button>';
         }
@@ -630,7 +672,7 @@
       var at = new Date().toISOString();
       var batch = uid(); // every line saved together: one delivery, one restock, …
       var out = [];
-      var bad = null, noPrice = null, noFarmer = null;
+      var bad = null, noPrice = null, noFarmer = null, part = null;
       var line = function (id, q, extra) {
         return Object.assign({ id: uid(), date: date, type: type, itemId: id, qty: q,
           from: type === 'sale' || type === 'transfer' || type === 'loss' ? from : '',
@@ -660,6 +702,7 @@
         if (!isFinite(q) || q < 0) { bad = bad || row; return; }
         if (q === 0 && type !== 'count') return;
         var id = row.getAttribute('data-item');
+        if (q % 1 && Stock.wholeUnits(itemById(id))) { part = part || row; return; }
         var price = 0;
         if (type === 'sale') {
           var pr = row.querySelector('input[name=price]').value.trim().replace(/,/g, '');
@@ -673,6 +716,11 @@
       if (bad) {
         err.textContent = 'One of the numbers is not right. Use digits only.';
         bad.scrollIntoView({ block: 'center' });
+        return;
+      }
+      if (part) {
+        err.textContent = 'Only kg can have a point. Count jars, pieces and animals in whole numbers (1, 2, 3…).';
+        part.scrollIntoView({ block: 'center' });
         return;
       }
       if (noFarmer) {
@@ -690,6 +738,10 @@
       }
       if (!out.length) { err.textContent = 'Type a number next to at least one item.'; return; }
       var mvts = movements();
+      var ago = Math.round((Date.parse(today() + 'T00:00:00Z') - Date.parse(date + 'T00:00:00Z')) / 864e5);
+      if (ago > 31 && !window.confirm('The date is ' + ago + ' days ago (' + niceDate(date) + ').\n\nIs the date right?')) return;
+      var ownPlace = type === 'sale' || type === 'loss' || type === 'transfer' ? from : to;
+      if (notMine(ownPlace) && !window.confirm(locName(ownPlace) + ' is not your place.\n\nSave this for ' + locName(ownPlace) + ' anyway?')) return;
       var lineText = function (m) {
         var it = itemById(m.itemId) || {};
         return '• ' + qty(m.qty) + (it.unit === 'kg' ? ' kg ' : ' × ') + (it.name || m.itemId);
@@ -699,7 +751,7 @@
       if (type === 'restock' && !Stock.everCounted(mvts, to) && !window.confirm(locName(to) + ' has never been counted.\n\n' +
           'Was ALL of this stock delivered, made or harvested just now?\n\nIf it was already on the shelf, press Cancel and use Stock count instead.')) return;
       var place = type === 'sale' ? from : to;
-      var waiting = (type === 'sale' || type === 'count') && Stock.pendingDeliveries(mvts, [place], today(), 30)[0];
+      var waiting = (type === 'sale' || type === 'count') && Stock.pendingDeliveries(mvts, [place], today())[0];
       if (waiting && !window.confirm('A delivery from ' + locName(waiting.from) + ' to ' + locName(waiting.to) + ' is not confirmed yet.\n\n' +
           'Press Cancel and confirm the delivery first, or OK to save anyway.')) return;
       var overs = form.querySelectorAll('.item[data-here="1"] .warn:not([hidden])').length;
@@ -722,7 +774,7 @@
       if (type === 'transfer') { state.prefs.from = from; state.prefs.to = to; }
       save('prefs', state.prefs);
       state.queue = state.queue.concat(out);
-      save('queue', state.queue);
+      saveQueue();
       state.lastSaved = { type: type, count: out.length, amount: out.reduce(function (s, m) { return s + m.qty * m.price; }, 0) };
       state.view = 'done';
       render();
@@ -854,7 +906,7 @@
   // ---------- confirming a delivery ----------
   function renderReceive(v) {
     var key = state.receiving || {};
-    var d = Stock.pendingDeliveries(movements(), [], today(), 30).filter(function (x) { return x.batch === key.batch && x.to === key.to; })[0];
+    var d = Stock.pendingDeliveries(movements(), [], today()).filter(function (x) { return x.batch === key.batch && x.to === key.to; })[0];
     if (!d) { state.view = null; return render(); }
     v.innerHTML =
       '<button class="back" data-act="cancel">‹ Back</button>' +
@@ -895,12 +947,12 @@
         var l = d.lines[Number(row.getAttribute('data-i'))];
         var raw = row.querySelector('input').value.trim().replace(',', '.');
         var got = Number(raw);
-        if (raw === '' || !isFinite(got) || got < 0) { bad = true; return; }
+        if (raw === '' || !isFinite(got) || got < 0 || (got % 1 && Stock.wholeUnits(itemById(l.itemId)))) { bad = true; return; }
         if (got < l.qty) short += l.qty - got;
         out.push({ id: uid(), date: today(), type: 'receive', itemId: l.itemId, qty: got, sent: l.qty, from: d.from, to: d.to, price: 0,
                    worker: state.profile.name, note: note, at: at, batch: d.batch });
       });
-      if (bad) { err.textContent = 'Type how many arrived for every item (0 if none).'; return; }
+      if (bad) { err.textContent = 'Type how many arrived for every item (0 if none), in whole numbers except kg.'; return; }
       if (short && !window.confirm(qty(short) + ' fewer than were sent. ' + d.worker + ' and the manager will see this. Confirm?')) return;
       saveLines('receive', out, d.to);
     });
@@ -911,7 +963,7 @@
     state.prefs.shop = place;
     save('prefs', state.prefs);
     state.queue = state.queue.concat(out);
-    save('queue', state.queue);
+    saveQueue();
     state.lastSaved = { type: type, count: out.length, amount: 0 };
     state.view = 'done';
     render();
@@ -922,10 +974,11 @@
   function renderDone(v) {
     var s = state.lastSaved || { count: 0 };
     var T = TYPES[s.type] || TYPES.restock;
-    var waiting = !DEMO && state.queue.length;
+    var waiting = !DEMO && myWaiting().length;
     v.innerHTML = '<div class="done"><div class="big">✅</div><h1>Saved</h1>' +
       '<p>' + T.verb + ': ' + s.count + ' item' + (s.count === 1 ? '' : 's') + (s.type === 'sale' ? ' · ' + ksh(s.amount) : '') + '</p>' +
-      '<p class="muted">' + (DEMO ? 'Saved on this phone (demo).' : waiting ? 'Saved on this phone. It will be sent to the sheet when there is signal.' : 'Sent to the stock sheet.') + '</p>' +
+      '<p class="muted">' + (DEMO ? 'Saved on this phone (demo).' : state.storageError && waiting ? '⚠️ The phone could not store it. Keep the app open until it is sent.'
+        : waiting ? 'Saved on this phone. It will be sent to the sheet when there is signal.' : 'Sent to the stock sheet.') + '</p>' +
       '<div class="btn-row">' + (s.type === 'receive' ? '' : '<button class="btn" data-form="' + esc(s.type) + '">Record more</button>') +
       '<button class="btn secondary" data-act="home">Done</button>' +
       (isManager() ? '<button class="btn secondary" data-tab="dashboard">See dashboard</button>' : '') + '</div></div>';
@@ -984,11 +1037,14 @@
     var winMonth = monthName(win.month, true).split(' ')[0];
     var counts = '<h2>Month-end count (' + esc(winMonth) + ')</h2><ul class="list">' + locs.map(function (l) {
       var last = s.lastCount[l.id];
-      var done = Stock.countedSince(movements(), l.id, win.start);
+      var keptHere = items().filter(function (it) { return Stock.kept(it, l.id); }).length;
+      var missing = Stock.countMissing(movements(), items(), l.id, win.start).length;
+      var done = !missing;
+      var part = !done && missing < keptHere ? ' · ' + (keptHere - missing) + ' of ' + keptHere + ' items counted' : '';
       var pill = done ? '<span class="pill ok">✓ Done</span>'
         : win.closed ? '<span class="pill bad">✗ Missed</span>' : '<span class="pill warn">⚠ ' + (win.late ? 'Late' : 'Due') + '</span>';
       return '<li><span class="grow"><b>' + esc(l.name) + '</b><br><span class="muted small">' +
-        (last ? 'Last counted ' + esc(niceDate(last)) : 'Never counted') + '</span></span>' + pill + '</li>';
+        (last ? 'Last counted ' + esc(niceDate(last)) : 'Never counted') + esc(part) + '</span></span>' + pill + '</li>';
     }).join('') + '</ul>';
 
     var adj = s.adjustments.filter(function (a) { return a.movement.date.slice(0, 7) === ym && a.delta !== 0; });
@@ -1253,14 +1309,18 @@
     var fresh = state.data && state.data.fetchedAt ? new Date(state.data.fetchedAt).toLocaleString('en-KE') : 'never';
     v.innerHTML = '<h1>' + esc(state.profile.name) + '</h1>' +
       '<div class="card">' +
-      '<p><b>Waiting to send:</b> ' + state.queue.length + ' entr' + (state.queue.length === 1 ? 'y' : 'ies') + '</p>' +
+      '<p><b>Waiting to send:</b> ' + myWaiting().length + ' entr' + (myWaiting().length === 1 ? 'y' : 'ies') + '</p>' +
+      (othersWaiting().length ? '<p class="muted small">' + othersWaiting().length + ' more by someone else wait for them to sign in here.</p>' : '') +
       '<p><b>Last update from the sheet:</b> ' + esc(DEMO ? 'demo' : fresh) + '</p>' +
       (state.lastError ? '<p class="err">' + esc(state.lastError) + '</p>' : '') +
       '<div class="btn-row"><button class="btn secondary" data-act="sync">Send and refresh now</button></div>' +
       '</div>' +
       (state.rejected.length ? '<h2>Refused by the sheet</h2><p class="muted small">These were not saved in the sheet. Tell the manager, then clear them.</p>' +
         '<ul class="list">' + state.rejected.map(function (m) {
-          var why = m.reason === 'invalid' ? 'item or place no longer exists' : 'refused';
+          var why = {
+            invalid: 'item or place no longer exists', whole_number: 'only kg can have a point', price: 'price below 0',
+            date: 'date is wrong', no_delivery: 'that delivery is not in the sheet', already_received: 'this delivery was already confirmed',
+          }[m.reason] || 'refused';
           return movementLi(m).replace('</span></span>', ' · <b>' + esc(why) + '</b></span></span>');
         }).join('') + '</ul>' +
         '<div class="btn-row"><button class="btn secondary" data-act="clear-rejected">Clear this list</button></div>' : '') +
@@ -1310,7 +1370,8 @@
       sync();
     } else if (act === 'signout' || act === 'resign') {
       if (state.queue.length && !DEMO && act === 'signout' &&
-          !window.confirm(state.queue.length + ' entries are not sent yet. They stay on this phone and go when you sign in again. Sign out?')) return;
+          !window.confirm(state.queue.length + ' entries are not sent yet. They stay on this phone and are sent under the name of whoever made them, ' +
+            'when that person (or a manager) signs in here again. Sign out?')) return;
       state.profile = null;
       save('profile', null);
       render();

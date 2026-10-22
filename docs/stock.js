@@ -296,12 +296,13 @@
   }
 
   /**
-   * Deliveries not yet confirmed: transfers sent in the last `days` days to one of `placeIds` (all places if empty),
-   * grouped by batch, with no receive for that batch. Newest first.
+   * Deliveries not yet confirmed: transfers to one of `placeIds` (all places if empty), grouped by batch, with no
+   * receive for that batch. They stay until confirmed or rejected ("never came"), however old; `days` (optional)
+   * limits them to the last `days` days. Each has `age` = days since it was sent. Newest first.
    */
   function pendingDeliveries(movements, placeIds, today, days) {
     var p = today.split('-').map(Number);
-    var since = new Date(Date.UTC(p[0], p[1] - 1, p[2] - (days || 14))).toISOString().slice(0, 10);
+    var since = days ? new Date(Date.UTC(p[0], p[1] - 1, p[2] - days)).toISOString().slice(0, 10) : '';
     var done = {};
     movements.forEach(function (m) { if (m.type === 'receive' && m.batch) done[m.batch + '|' + m.to] = true; });
     var groups = {};
@@ -310,7 +311,8 @@
       if (placeIds.length && placeIds.indexOf(m.to) < 0) return;
       var k = m.batch + '|' + m.to;
       if (done[k]) return;
-      var g = groups[k] || (groups[k] = { batch: m.batch, from: m.from, to: m.to, date: m.date, worker: m.worker, lines: [] });
+      var g = groups[k] || (groups[k] = { batch: m.batch, from: m.from, to: m.to, date: m.date, worker: m.worker, lines: [],
+        age: Math.max(0, Math.round((Date.UTC(p[0], p[1] - 1, p[2]) - Date.parse(m.date + 'T00:00:00Z')) / 864e5)) });
       g.lines.push({ itemId: m.itemId, qty: num(m.qty) });
     });
     return Object.keys(groups).map(function (k) { return groups[k]; }).sort(function (a, b) { return a.date < b.date ? 1 : -1; });
@@ -353,6 +355,21 @@
   /** True if `locationId` has a count dated on or after `start`. */
   function countedSince(movements, locationId, start) {
     return movements.some(function (m) { return m.type === 'count' && m.to === locationId && m.date >= start; });
+  }
+
+  /**
+   * Items kept at `locationId` (active ones) with no count line there dated on or after `start`. Empty = the count
+   * is complete. A count is only done when every item has a number (0 if there are none).
+   */
+  function countMissing(movements, items, locationId, start) {
+    var seen = {};
+    movements.forEach(function (m) { if (m.type === 'count' && m.to === locationId && m.date >= start) seen[m.itemId] = true; });
+    return items.filter(function (it) { return it.active !== false && kept(it, locationId) && !seen[it.id]; });
+  }
+
+  /** Items counted in whole numbers (pieces, jars, animals…). Only kg items take decimals. */
+  function wholeUnits(item) {
+    return !item || item.unit !== 'kg';
   }
 
   /** True if `locationId` has ever had a stock count (its opening count included). */
@@ -501,7 +518,7 @@
   }
 
   return { TYPES: TYPES, kept: kept, replay: replay, flow: flow, flowKg: flowKg, pendingDeliveries: pendingDeliveries, summarise: summarise, onHand: onHand, monthsBack: monthsBack, sortMovements: sortMovements,
-           soldOn: soldOn, daysLeftInMonth: daysLeftInMonth, countWindow: countWindow, countedSince: countedSince,
+           soldOn: soldOn, daysLeftInMonth: daysLeftInMonth, countWindow: countWindow, countedSince: countedSince, countMissing: countMissing, wholeUnits: wholeUnits,
            everCounted: everCounted, recentDuplicate: recentDuplicate,
            entryKey: entryKey, rejectedKeys: rejectedKeys, withoutRejected: withoutRejected, entries: entries, checks: checks };
 });

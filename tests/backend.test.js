@@ -71,6 +71,7 @@ function load() {
   };
   vm.createContext(ctx);
   vm.runInContext(fs.readFileSync(path.join(__dirname, '../backend/Code.gs'), 'utf8'), ctx);
+  ctx.now_ = () => new Date('2026-11-05T09:00:00+03:00'); // test entries are dated October 2026
   ctx.setup();
   sheets.workers.rows[1] = ['Mwende Musyoka', '0427', 'yes', '', '', 'manager'];
   sheets.workers.rows[2] = ['Otieno', '1111', 'no', '', ''];
@@ -175,10 +176,12 @@ test('morning on an ordinary day sends nothing; before any use nothing at all', 
 
 test('last day of the month: places not counted are reminded morning and evening', () => {
   const env = withPlaces(load());
-  env.post({ action: 'save', ...mwende, movements: [
-    sale('c1', { type: 'count', from: '', to: 'nairobi', date: '2026-10-30', price: 0 }),
-    sale('c2', { type: 'count', from: '', to: 'kiunduani', date: '2026-09-30', price: 0 }), // last month: doesn't count
-  ] });
+  // Nairobi: every item kept there counted (0 is a number). Kiunduani: only last month's count.
+  const kept = Seed.ITEMS.filter((r) => !r[6] || /Nairobi/.test(r[6])).map((r) => r[0]);
+  env.post({ action: 'save', ...mwende, movements: kept.map((id, i) =>
+    sale('c' + i, { type: 'count', itemId: id, qty: i % 2, from: '', to: 'nairobi', date: '2026-10-30', price: 0 })).concat([
+    sale('k1', { type: 'count', from: '', to: 'kiunduani', date: '2026-09-30', price: 0 }), // last month: doesn't count
+  ]) });
   const morning = JSON.parse(JSON.stringify(env.ctx.reminders_(nairobi('2026-10-31T09:00:00'))));
   assert.deepEqual(morning.filter((x) => x.kind === 'count'), [{ to: 'kalondu@example.com', kind: 'count', place: 'kiunduani' }]);
   assert.equal(env.mail.some((m) => m.to === 'mwende@example.com'), false);
@@ -197,6 +200,64 @@ test('sign-in returns the worker\'s places by id or by name, several allowed', (
   assert.deepEqual(places('Otieno Juma', '3333'), ['nairobi']);
   assert.deepEqual(places('Mwende Musyoka', '0427'), []);
   assert.deepEqual(places('Felix', '5555'), ['farm', 'kiunduani']);  // unknown "Nowhere" is skipped
+});
+
+test('a month-end count with items left out is not finished: the email says how many are missing', () => {
+  const env = withPlaces(load());
+  env.post({ action: 'save', ...mwende, movements: [sale('c1', { type: 'count', from: '', to: 'kiunduani', date: '2026-10-31', price: 0 })] });
+  const sent = JSON.parse(JSON.stringify(env.ctx.reminders_(nairobi('2026-10-31T09:00:00'))));
+  assert.deepEqual(sent.filter((x) => x.kind === 'count' && x.place === 'kiunduani').length, 1);
+  assert.match(env.mail.find((m) => m.to === 'kalondu@example.com').body, /is not finished: \d+ items have no number yet/);
+});
+
+test('save refuses half units, negative prices and impossible dates, with a reason', () => {
+  const { post } = load();
+  const r = post({ action: 'save', ...mwende, movements: [
+    sale('w1', { itemId: 'rabbit', qty: 0.5, from: 'farm' }),
+    sale('w2', { itemId: 'tilapia', qty: 2.5, from: 'farm' }),        // kg: decimals fine
+    sale('w3', { price: -100 }),
+    sale('w4', { date: '2026-11-20' }),                                // after tomorrow
+    sale('w5', { date: '2024-01-01' }),                                // far too old
+  ] });
+  assert.deepEqual(r.saved, ['w2']);
+  assert.deepEqual(JSON.parse(JSON.stringify(r.reasons)), { w1: 'whole_number', w3: 'price', w4: 'date', w5: 'date' });
+});
+
+test('a delivery confirmation must match a delivery in the sheet; "sent" comes from the sheet', () => {
+  const { post } = load();
+  const base = { date: '2026-10-05', price: 0, at: '2026-10-05T10:00:00Z', from: 'farm', to: 'nairobi' };
+  post({ action: 'save', ...mwende, movements: [{ ...base, id: 't1', type: 'transfer', itemId: 'honey-1kg', qty: 12, batch: 'D' }] });
+  const r = post({ action: 'save', ...mwende, movements: [
+    { ...base, id: 'r1', type: 'receive', itemId: 'honey-1kg', qty: 12, batch: 'D', sent: 99 },
+    { ...base, id: 'r2', type: 'receive', itemId: 'honey-500g', qty: 3, batch: 'D', sent: 3 },     // not in that delivery
+    { ...base, id: 'r3', type: 'receive', itemId: 'honey-1kg', qty: 5, batch: 'NONE', sent: 5 },   // no such delivery
+  ] });
+  assert.deepEqual(r.saved, ['r1']);
+  assert.deepEqual(JSON.parse(JSON.stringify(r.reasons)), { r2: 'no_delivery', r3: 'no_delivery' });
+  assert.equal(post({ action: 'data', ...mwende }).movements.find((m) => m.id === 'r1').sent, 12);
+  // A second phone confirming the same delivery later is refused.
+  const again = post({ action: 'save', ...mwende, movements: [{ ...base, id: 'r9', type: 'receive', itemId: 'honey-1kg', qty: 10, batch: 'D', sent: 12 }] });
+  assert.equal(again.reasons.r9, 'already_received');
+});
+
+test('entries another worker left on a manager\'s phone keep that worker\'s name; a worker cannot do the same', () => {
+  const { post, sheets } = load();
+  post({ action: 'save', ...mwende, movements: [sale('o1', { worker: 'kalondu' }), sale('o2', { worker: 'Nobody Known' })] });
+  post({ action: 'save', ...kalondu, movements: [sale('o3', { worker: 'Mwende Musyoka' })] });
+  const head = sheets.movements.rows[0];
+  const rows = sheets.movements.rows.slice(1).map((r) => Object.fromEntries(head.map((h, i) => [h, r[i]])));
+  assert.deepEqual(rows.map((r) => r.worker), ['Kalondu', 'Mwende Musyoka', 'Kalondu']);
+  assert.match(rows[0].note, /sent by Mwende Musyoka/);
+});
+
+test('a worker only receives the reviews of entries they can see', () => {
+  const env = withPlaces(load());
+  env.post({ action: 'save', ...mwende, movements: [sale('v1', { from: 'nairobi' }), sale('v2', { from: 'kiunduani' })] });
+  env.post({ action: 'review', ...mwende, key: 'v1', decision: 'reject', reason: 'wrong shop' });
+  env.post({ action: 'review', ...mwende, key: 'v2', decision: 'reject', reason: 'typo' });
+  const keys = (who) => JSON.parse(JSON.stringify(env.post({ action: 'data', ...who }).rejections)).map((r) => r.key);
+  assert.deepEqual(keys(kalondu), ['v2']);
+  assert.deepEqual(keys(mwende), ['v1', 'v2']);
 });
 
 test('a worker with several places is reminded for each of them', () => {
@@ -384,10 +445,11 @@ test('packing and delivery confirmations are stored and checked', () => {
     { ...base, id: 'p4', type: 'pack', itemId: 'honey-1kg', qty: 1, from: '', to: 'farm' },                     // no batch: refused
     { ...base, id: 't1', type: 'transfer', itemId: 'honey-1kg', qty: 10, from: 'farm', to: 'kiunduani', batch: 'D' },
     { ...base, id: 'r1', type: 'receive', itemId: 'honey-1kg', qty: 9, from: 'farm', to: 'kiunduani', batch: 'D', sent: 10 },
-    { ...base, id: 'r2', type: 'receive', itemId: 'honey-1kg', qty: 9, from: 'farm', to: 'kiunduani', batch: 'D' },  // no sent: refused
+    { ...base, id: 'r2', type: 'receive', itemId: 'honey-1kg', qty: 9, from: 'farm', to: 'kiunduani', batch: 'D', sent: 10 },  // confirmed twice: refused
   ] });
   assert.deepEqual(r.saved, ['p1', 'p2', 't1', 'r1']);
   assert.deepEqual(r.rejected, ['p3', 'p4', 'r2']);
+  assert.equal(r.reasons.r2, 'already_received');
   const back = post({ action: 'data', ...mwende });
   assert.equal(back.movements.find((m) => m.id === 'r1').sent, 10);
   assert.equal(back.movements.find((m) => m.id === 'p2').batch, 'P');

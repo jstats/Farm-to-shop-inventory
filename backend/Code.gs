@@ -51,6 +51,7 @@ var TABS = {
   rejections: ['key', 'action', 'reason', 'by', 'at'],
 };
 var REVIEW_ACTIONS = ['reject', 'restore', 'keep'];
+var OLDEST_DAYS = 400;  // entries dated further back than this (or after tomorrow) are refused as a date mistake
 
 // From beelovefarm.org/shop/beekeeping (October 2026), plus farm produce, livestock and fish (prices to be set in the sheet).
 // reorderLevel = warn when a shop (or, for Packaging, the farm) has this many or fewer. Then places (where it is kept)
@@ -333,6 +334,11 @@ function review_(who, body) {
   return { ok: true, rejections: rejections_() };
 }
 
+/** The time now (a function so tests can set the date). */
+function now_() {
+  return new Date();
+}
+
 function doGet() {
   return json_({ ok: true, service: 'beelove-inventory' });
 }
@@ -351,9 +357,15 @@ function doPost(e) {
   if (body.action === 'data') {
     var out = data_();
     if (!who.manager) {
-      // Workers get what their screens need: their places' entries (stock on hand, deliveries, reminders) and their own.
+      // Workers get what their screens need: their places' entries (stock on hand, deliveries, reminders) and their own,
+      // and only the reviews of those entries.
       out.movements = out.movements.filter(function (m) {
         return m.worker === who.name || who.places.indexOf(m.from) >= 0 || who.places.indexOf(m.to) >= 0;
+      });
+      var keys = {};
+      out.movements.forEach(function (m) { keys[m.batch || m.id] = true; keys[m.id] = true; });
+      out.rejections = out.rejections.filter(function (r) {
+        return String(r.key).split('|').every(function (k) { return keys[k]; });
       });
     }
     out.ok = true;
@@ -383,7 +395,20 @@ function doPost(e) {
     var locs = {};
     rows_('locations').forEach(function (r) { locs[String(r.locationId)] = r; });
 
-    var now = new Date();
+    var now = now_();
+    var today = Utilities.formatDate(now, TZ, 'yyyy-MM-dd');
+    var latest = addDays_(today, 1), earliest = addDays_(today, -OLDEST_DAYS);
+    // Deliveries in the sheet (sent per batch, place and item) and what has been confirmed already.
+    var live = liveMovementRows_();
+    var sentQty = {}, received = {};
+    live.forEach(function (r) {
+      var k = String(r.batch) + '|' + String(r.to) + '|' + String(r.itemId);
+      if (String(r.type) === 'transfer' && r.batch) sentQty[k] = (sentQty[k] || 0) + (Number(r.qty) || 0);
+      if (String(r.type) === 'receive' && r.batch) received[k] = true;
+    });
+    // A manager's phone may send entries another worker left waiting on it: they keep that worker's name.
+    var active = {};
+    rows_('workers').forEach(function (w) { if (yes_(w.active)) active[String(w.name).trim().toLowerCase()] = String(w.name).trim(); });
     var saved = [], rejected = [], reasons = {}, rows = [];
     (body.movements || []).forEach(function (m) {
       var id = String(m.id || '');
@@ -395,20 +420,36 @@ function doPost(e) {
         (!m.from || locs[m.from]) && (!m.to || locs[m.to]);
       // Packing lines take from one place or add to it, never both; a confirmation says what was sent and which delivery.
       if (ok && m.type === 'pack') ok = !!m.from !== !!m.to && !!m.batch;
-      if (ok && m.type === 'receive') ok = !!m.from && !!m.to && !!m.batch && isFinite(Number(m.sent)) && Number(m.sent) >= 0;
+      if (ok && m.type === 'receive') ok = !!m.from && !!m.to && !!m.batch;
       if (!ok) { rejected.push(id); reasons[id] = 'invalid'; return; }
+      var why = '';
+      if (qty % 1 && String(it.unit) !== 'kg') why = 'whole_number';  // half a rabbit or jar is a typing mistake
+      else if (m.type === 'sale' && !(Number(m.price) >= 0)) why = 'price';
+      else if (m.date > latest || m.date < earliest) why = 'date';
+      var rk = String(m.batch) + '|' + String(m.to) + '|' + String(m.itemId);
+      if (!why && m.type === 'receive') {
+        // A confirmation must match a delivery in the sheet, and each item of a delivery is confirmed once.
+        if (!sentQty.hasOwnProperty(rk)) why = 'no_delivery';
+        else if (received[rk]) why = 'already_received';
+      }
+      if (why) { rejected.push(id); reasons[id] = why; return; }
+      if (m.type === 'receive') received[rk] = true;
+      if (m.type === 'transfer' && m.batch) sentQty[rk] = (sentQty[rk] || 0) + qty;  // confirmable in the same send
+      var by = who.name, note = String(m.note || '');
+      var owner = active[String(m.worker || '').trim().toLowerCase()];
+      if (who.manager && owner && owner !== who.name) { by = owner; note = (note ? note + ' · ' : '') + 'sent by ' + who.name; }
       var price = m.type === 'sale' ? Number(m.price) || 0 : '';
       var bought = m.type === 'restock' && m.source === 'bought';
       var v = {
         movementId: id, date: m.date, type: m.type, itemId: m.itemId, itemName: it.name, qty: qty, unit: it.unit,
-        from: m.from || '', to: m.to || '', price: price, amount: m.type === 'sale' ? qty * price : '', worker: who.name,
-        note: String(m.note || '').slice(0, 500), at: m.at || '', receivedAt: now,
+        from: m.from || '', to: m.to || '', price: price, amount: m.type === 'sale' ? qty * price : '', worker: by,
+        note: note.slice(0, 500), at: m.at || '', receivedAt: now,
         source: m.type === 'restock' ? (bought ? 'bought' : m.source === 'own' ? 'own' : '') : '',
         supplier: bought ? String(m.supplier || '').slice(0, 100) : '',
         cost: bought ? Math.max(0, Number(m.cost) || 0) : '',
         reason: m.type === 'loss' ? (LOSS_REASONS.indexOf(m.reason) >= 0 ? m.reason : 'other') : '',
         batch: String(m.batch || '').slice(0, 80),
-        sent: m.type === 'receive' ? Number(m.sent) : '',
+        sent: m.type === 'receive' ? sentQty[rk] : '',  // what the sheet says was sent, not what the phone says
       };
       rows.push(head.map(function (h) { return v.hasOwnProperty(h) ? v[h] : ''; }));
       seen[id] = true;
@@ -481,6 +522,9 @@ function reminders_(now) {
     return { name: String(w.name).trim(), email: String(w.email || '').trim(), places: placeIds_(w.place) };
   });
 
+  var itemRows = rows_('items').filter(function (r) { return r.itemId && yes_(r.active); }).map(function (r) {
+    return { id: String(r.itemId), places: placeIds_(r.places) };
+  });
   var issues = [];
   locs.forEach(function (l) {
     var id = String(l.locationId);
@@ -489,10 +533,13 @@ function reminders_(now) {
       if (!sold) issues.push({ place: l, kind: 'sales' });
     }
     if (lastDay) {
-      // Done if counted in the last 3 days of the month (same window as countWindow in docs/stock.js).
+      // Done when every item kept there has a count in the last 3 days of the month (same rule as countWindow and
+      // countMissing in docs/stock.js). One item counted is not a finished count.
       var start = month + '-' + String(Number(today.slice(8, 10)) - 2).padStart(2, '0');
-      var counted = moves.some(function (m) { return m.type === 'count' && String(m.to) === id && date_(m.date) >= start; });
-      if (!counted) issues.push({ place: l, kind: 'count' });
+      var seen = {};
+      moves.forEach(function (m) { if (m.type === 'count' && String(m.to) === id && date_(m.date) >= start) seen[String(m.itemId)] = true; });
+      var missing = itemRows.filter(function (it) { return (!it.places.length || it.places.indexOf(id) >= 0) && !seen[it.id]; });
+      if (missing.length) issues.push({ place: l, kind: 'count', missing: missing.length, started: Object.keys(seen).length > 0 });
     }
   });
   if (!issues.length) return [];
@@ -511,7 +558,8 @@ function reminders_(now) {
       } else {
         subject = 'Beelove: ' + monthName + ' stock count at ' + x.place.name;
         body = 'Hello ' + first + ',\n\nToday is the last day of ' + monthName + ' and the stock count for ' + x.place.name +
-          ' has not been done yet.\nPlease count everything that is there and enter it in the app (Monthly count):\n' + APP_URL +
+          (x.started ? ' is not finished: ' + x.missing + ' item' + (x.missing === 1 ? ' has' : 's have') + ' no number yet (type 0 if none).'
+            : ' has not been done yet.') + '\nPlease count everything that is there and enter it in the app (Monthly count):\n' + APP_URL +
           '\n\nBeelove Farm';
       }
       MailApp.sendEmail(w.email, subject, body);
