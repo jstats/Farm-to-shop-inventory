@@ -1,7 +1,9 @@
 /* Keeps the app working with no signal. Bump VERSION whenever a file below changes. */
-var VERSION = 'beelove-stock-v17';  // keep equal to APP_VERSION in app.js (a test checks)
+var VERSION = 'beelove-stock-v18';  // keep equal to APP_VERSION in app.js (a test checks)
 var FILES = ['./', 'index.html', 'styles.css', 'config.js', 'stock.js', 'seed.js', 'app.js', 'manifest.webmanifest',
-             'icons/icon-192.png', 'icons/icon-512.png', 'icons/apple-touch-icon.png'];
+             'icons/icon-192.png', 'icons/icon-512.png', 'icons/apple-touch-icon.png'].concat(
+  // Product photos (about 75 KB together), so the item lists look the same with no signal.
+  ['bee-attractant', 'bee-brush', 'bee-gloves', 'bee-smoker', 'bee-suit', 'catfish-fingerling', 'catfish', 'cone-strainer', 'frame-grip', 'hive-tool', 'honey-150g', 'honey-1kg', 'honey-300g', 'honey-500g', 'honey-bucket', 'honey-bulk', 'honey-extractor', 'honey-strainer', 'ktbh-hive', 'langstroth-hive', 'log-hive', 'modern-log-hive', 'propolis-mat', 'queen-excluder', 'refractometer', 'swarm-catcher', 'tilapia-fingerling', 'tilapia', 'uncapping-fork'].map(function (id) { return 'img/items/' + id + '.webp'; }));
 
 self.addEventListener('install', function (e) {
   // cache: 'reload' skips the browser's own cache, so a new version never stores old copies of the files.

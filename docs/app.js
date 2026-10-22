@@ -6,7 +6,7 @@
  * anything still waiting in the queue, so a worker always sees their own entries.
  */
 (function () {
-  var APP_VERSION = 17; // keep equal to VERSION in sw.js (a test checks)
+  var APP_VERSION = 18; // keep equal to VERSION in sw.js (a test checks)
   var CFG = window.BEELOVE_CONFIG || {};
   var DEMO = !CFG.apiUrl;
   var KEY = DEMO ? 'beelove-stock-demo:' : 'beelove-stock:';
@@ -90,6 +90,24 @@
     return l ? l.name : id;
   }
   function itemById(id) { return allItems().filter(function (i) { return i.id === id; })[0]; }
+
+  // ---------- product pictures ----------
+  // Small photos of our own products (from beelovefarm.org), stored with the app so they work offline.
+  // Items with no photo show a sign for their group instead.
+  var PHOTOS = ['ktbh-hive', 'langstroth-hive', 'modern-log-hive', 'log-hive', 'swarm-catcher', 'bee-suit', 'bee-gloves', 'bee-smoker',
+    'hive-tool', 'frame-grip', 'bee-brush', 'bee-attractant', 'queen-excluder', 'propolis-mat', 'honey-extractor', 'refractometer',
+    'honey-strainer', 'cone-strainer', 'uncapping-fork', 'honey-bucket', 'honey-150g', 'honey-300g', 'honey-500g', 'honey-1kg',
+    'honey-bulk', 'tilapia-fingerling', 'catfish-fingerling', 'tilapia', 'catfish'];
+  var CAT_SIGN = { Hives: '🐝', Protection: '🧤', Tools: '🔧', Processing: '⚙️', Honey: '🍯', Packaging: '🫙',
+    'Farm produce': '🍌', Livestock: '🐑', Fish: '🐟' };
+  function thumb(it, small) {
+    var cls = 'thumb' + (small ? ' sm' : '');
+    if (it && PHOTOS.indexOf(it.id) >= 0) {
+      return '<span class="' + cls + '"><img src="img/items/' + esc(it.id) + '.webp" alt="" loading="lazy" decoding="async" ' +
+        'onerror="this.parentNode.textContent=\'' + (CAT_SIGN[it.category] || '📦') + '\'"></span>';
+    }
+    return '<span class="' + cls + ' sign" aria-hidden="true">' + ((it && CAT_SIGN[it.category]) || '📦') + '</span>';
+  }
 
   /** Sheet movements plus the queue (the queue wins on the same id), rejected entries included. */
   function allMovements() {
@@ -521,7 +539,7 @@
         if (type === 'restock' && isBulkHoney(it)) {
           // Bulk honey has two sources: our harvest, and honey bought from farmers (who, and the price per kg).
           return '<div class="item bulk" data-item="' + esc(it.id) + '" data-cat="' + esc(c) + '">' +
-            '<div class="bulk-head"><div class="name">' + esc(it.name) + '</div><div class="meta">kg<span class="onhand"></span></div></div>' +
+            '<div class="bulk-head who">' + thumb(it) + '<div><div class="name">' + esc(it.name) + '</div><div class="meta">kg<span class="onhand"></span></div></div></div>' +
             '<div class="row2"><div><label for="q-' + esc(it.id) + '">Our harvest (kg)</label>' +
             '<input id="q-' + esc(it.id) + '" inputmode="decimal" name="qty" placeholder="–" autocomplete="off"></div>' +
             '<div><label for="qb-' + esc(it.id) + '">Bought from farmers (kg)</label>' +
@@ -533,8 +551,8 @@
             '<div class="warn" hidden></div><div class="price-box" hidden><input name="price"></div></div>';
         }
         return '<div class="item sale-able" data-item="' + esc(it.id) + '" data-cat="' + esc(c) + '">' +
-          '<div><div class="name">' + esc(it.name) + '</div><div class="meta">' + esc(it.unit) + (it.price ? ' · ' + ksh(it.price) : '') +
-          '<span class="onhand"></span></div></div>' +
+          '<div class="who">' + thumb(it) + '<div><div class="name">' + esc(it.name) + '</div><div class="meta">' + esc(it.unit) + (it.price ? ' · ' + ksh(it.price) : '') +
+          '<span class="onhand"></span></div></div></div>' +
           '<div class="price-box" hidden><label for="p-' + esc(it.id) + '"></label><input id="p-' + esc(it.id) + '" inputmode="decimal" name="price" value="' +
           (it.price ? esc(it.price) : '') + '" placeholder="KSh" data-default="' + (it.price ? esc(it.price) : '') + '"></div>' +
           '<div><label for="q-' + esc(it.id) + '">' + (type === 'count' ? 'On shelf' : 'How many') + '</label>' +
@@ -822,8 +840,8 @@
     }
     function drawList() {
       $('#pack-list').innerHTML = containers().map(function (it) {
-        return '<div class="item" data-item="' + esc(it.id) + '"><div><div class="name">' + esc(it.name) + '</div><div class="meta">' +
-          esc(it.unit) + ' · ' + it.kgEach + ' kg each<span class="empties"></span></div></div><div><label for="q-' + esc(it.id) + '">How many</label>' +
+        return '<div class="item" data-item="' + esc(it.id) + '"><div class="who">' + thumb(it) + '<div><div class="name">' + esc(it.name) + '</div><div class="meta">' +
+          esc(it.unit) + ' · ' + it.kgEach + ' kg each<span class="empties"></span></div></div></div><div><label for="q-' + esc(it.id) + '">How many</label>' +
           '<input id="q-' + esc(it.id) + '" inputmode="decimal" name="qty" placeholder="–" autocomplete="off"></div>' +
           '<div class="warn" hidden></div></div>';
       }).join('');
@@ -916,7 +934,7 @@
       '<form id="mv" novalidate>' +
       d.lines.map(function (l, i) {
         var it = itemById(l.itemId) || { name: l.itemId, unit: '' };
-        return '<div class="item sale" data-i="' + i + '"><div><div class="name">' + esc(it.name) + '</div><div class="meta">' + esc(it.unit) + '</div></div>' +
+        return '<div class="item sale" data-i="' + i + '"><div class="who">' + thumb(it) + '<div><div class="name">' + esc(it.name) + '</div><div class="meta">' + esc(it.unit) + '</div></div></div>' +
           '<div><label>Sent</label><div class="num" style="padding:12px 8px;font-weight:700">' + qty(l.qty) + '</div></div>' +
           '<div><label for="r-' + i + '">Arrived</label><input id="r-' + i + '" inputmode="decimal" name="qty" value="' + l.qty + '" autocomplete="off"></div>' +
           '<div class="warn" hidden></div></div>';
@@ -993,12 +1011,29 @@
     var curMonth = s.salesByMonth[s.salesByMonth.length - 1];
     var prevMonth = s.salesByMonth[s.salesByMonth.length - 2];
 
+    var onTheWay = Stock.pendingDeliveries(movements(), [], today());
+    var oldest = onTheWay.reduce(function (a, d) { return !a || d.age > a.age ? d : a; }, null);
+    // The latest month-end window that has started: this month's from the 3rd-last day, otherwise last month's.
+    var countWin = Stock.countWindow(today());
+    if (!countWin) {
+      var cd = new Date(today() + 'T00:00:00');
+      cd.setDate(0); // last day of the previous month
+      countWin = Stock.countWindow(cd.getFullYear() + '-' + String(cd.getMonth() + 1).padStart(2, '0') + '-' + String(cd.getDate()).padStart(2, '0'));
+      countWin.late = true;
+      countWin.closed = true;
+    }
+    var winMonthShort = monthName(countWin.month, true).split(' ')[0];
+    var countsDone = locs.filter(function (l) { return !Stock.countMissing(movements(), items(), l.id, countWin.start).length; }).length;
     var tiles =
       '<div class="tiles">' +
       tile('Sales in ' + monthName(ym), ksh(s.month.sales), prevMonth ? 'Last month ' + ksh(prevMonth.amount) : '') +
       tile('Units sold', qty(s.month.units), s.month.entries + ' entries this month') +
       tile('Stock value', ksh(s.stockValue), 'At selling price, all places') +
       tile('Low in a shop', String(s.low.length), s.low.length ? 'Needs restocking' : 'Nothing low') +
+      tile('Deliveries on the way', String(onTheWay.length), onTheWay.length
+        ? 'Oldest sent ' + (oldest.age === 0 ? 'today' : oldest.age === 1 ? 'yesterday' : oldest.age + ' days ago') : 'All confirmed') +
+      tile('Places counted', countsDone + ' / ' + locs.length, countWin.closed ? winMonthShort + ': ' + (countsDone === locs.length ? 'all done' : 'missed') :
+        countWin.late ? 'Late: due by the 3rd' : 'Due by the end of the month') +
       '</div>';
 
     var chart = '<h2>Sales by month</h2><div class="card"><div class="chart-max">' + ksh(maxSale) + '</div><div class="chart" id="chart">' +
@@ -1014,7 +1049,7 @@
       }).join('') + '</tbody></table></div>' : '';
 
     var lowLi = function (l) {
-      return '<li><span class="grow"><b>' + esc(l.item.name) + '</b><br><span class="muted small">' + esc(locName(l.location)) +
+      return '<li class="with-thumb">' + thumb(l.item, true) + '<span class="grow"><b>' + esc(l.item.name) + '</b><br><span class="muted small">' + esc(locName(l.location)) +
         ' · reorder at ' + qty(l.item.reorderLevel) + (l.location === (farm() || {}).id ? '' : ' · farm has ' + qty(stockAt(s, l.item.id, (farm() || {}).id))) + '</span></span>' +
         '<span class="pill ' + (l.qty <= 0 ? 'bad' : 'warn') + '">' + (l.qty <= 0 ? '⛔ Out' : '⚠ ' + qty(l.qty) + ' left') + '</span></li>';
     };
@@ -1069,6 +1104,26 @@
     var flowRows = Stock.flow(movements(), honeyIds, locs.map(function (l) { return l.id; }), ym + '-01', today())
       .filter(function (r) { return r.start || r.in || r.out || r.sold || r.lost || r.countDiff || r.end; });
     var signed = function (n) { return (n > 0 ? '+' : '') + qty(n); };
+    // The honey journey this month in kg, at a glance: bulk at the farm → packed → sent to the shops → sold.
+    var kgOf = function (id) { return (itemById(id) || {}).kgEach || 0; };
+    var bulkIt = bulkHoney();
+    var shopIds = shops().map(function (l) { return l.id; });
+    var sumKg = function (f, pred) {
+      return Math.round(flowRows.filter(pred).reduce(function (t, r) { return t + r[f] * (r.itemId === (bulkIt || {}).id ? 1 : kgOf(r.itemId)); }, 0) * 10) / 10;
+    };
+    var bulkNow = sumKg('end', function (r) { return bulkIt && r.itemId === bulkIt.id; });
+    var packedKg = Math.round(movements().filter(function (m) { return m.type === 'pack' && m.to && m.date >= ym + '-01'; })
+      .reduce(function (t, m) { return t + (Number(m.qty) || 0) * kgOf(m.itemId); }, 0) * 10) / 10;
+    var shopsNow = sumKg('end', function (r) { return shopIds.indexOf(r.place) >= 0 && (!bulkIt || r.itemId !== bulkIt.id); });
+    var soldKg = sumKg('sold', function (r) { return !bulkIt || r.itemId !== bulkIt.id; });
+    var step = function (n, lbl, v, sub) {
+      return '<div class="step"><span class="lbl"><span class="n">' + n + '</span>' + lbl + '</span><b>' + qty(v) + ' kg</b><span class="sub">' + sub + '</span></div>';
+    };
+    var journey = flowRows.length ? '<h2>Honey journey, ' + esc(monthName(ym)) + '</h2><div class="journey">' +
+      step(1, 'Bulk at the farm', bulkNow, 'waiting to be packed') +
+      step(2, 'Packed', packedKg, 'into jars and bottles this month') +
+      step(3, 'In the shops', shopsNow, 'on the shelves now') +
+      step(4, 'Sold', soldKg, 'this month, all places') + '</div>' : '';
     var flowHtml = flowRows.length ? '<h2>Honey flow in ' + esc(monthName(ym)) + '</h2>' +
       '<p class="muted small">Start + In − Out − Sold − Lost ± Count (±) = Now. In: harvested, bought, packed or delivered. ' +
       'Out: sent away or used for packing. Lost: losses and deliveries that arrived short. ' +
@@ -1126,9 +1181,12 @@
       }).join('') + '</tbody></table></div>' +
       '<p class="muted small" style="margin-top:6px">⚠ at or below reorder level · ⛔ below zero: an entry is missing or wrong; the next count will correct it.</p>';
 
+    var topMax = s.top.length ? Math.max.apply(null, s.top.slice(0, 5).map(function (t) { return t.amount; }).concat([1])) : 1;
     var top = s.top.length ? '<h2>Best sellers in ' + esc(monthName(ym)) + '</h2><ul class="list">' + s.top.slice(0, 5).map(function (t) {
       var it = itemById(t.itemId);
-      return '<li><span class="grow">' + esc(it ? it.name : t.itemId) + '</span><span class="num small muted">' + qty(t.units) + ' ' + esc(it ? it.unit : '') +
+      return '<li class="with-thumb">' + thumb(it || { id: t.itemId }, true) + '<span class="grow">' + esc(it ? it.name : t.itemId) +
+        '<span class="hbar" aria-hidden="true"><span style="width:' + (t.amount / topMax * 100).toFixed(1) + '%"></span></span></span>' +
+        '<span class="num small muted">' + qty(t.units) + ' ' + esc(it ? it.unit : '') +
         '</span><span class="num" style="min-width:96px">' + ksh(t.amount) + '</span></li>';
     }).join('') + '</ul>' : '';
 
@@ -1162,7 +1220,7 @@
     } else if (tab === 'stock') {
       body = table + low + counts + adjHtml + waitHtml;
     } else if (tab === 'honey') {
-      body = inHtml + flowHtml + contHtml || '<p class="muted" style="margin-top:16px">No honey or jars moved this month yet.</p>';
+      body = journey + inHtml + flowHtml + contHtml || '<p class="muted" style="margin-top:16px">No honey or jars moved this month yet.</p>';
     } else if (tab === 'entries') {
       body = checkHtml + recent + rejectedHtml;
     } else {

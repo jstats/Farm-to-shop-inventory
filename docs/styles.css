@@ -255,3 +255,30 @@ li.rejected b { text-decoration: line-through; }
 .check-banner .grow { flex: 1; }
 .check-banner b { color: var(--bad); }
 .see-more { margin: 4px 0 0; text-align: right; }
+
+/* v18: product photos, delivery and count tiles, best-seller bars, the honey journey. */
+.who { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.thumb {
+  flex: none; width: 44px; height: 44px; border-radius: 10px; overflow: hidden;
+  background: var(--accent-tint); display: inline-flex; align-items: center; justify-content: center; font-size: 1.3rem;
+}
+.thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.thumb.sm { width: 32px; height: 32px; border-radius: 8px; font-size: 1rem; }
+.list li.with-thumb { align-items: center; }
+td .who { gap: 8px; }
+.hbar { display: block; height: 6px; margin-top: 6px; border-radius: 3px; background: var(--line); overflow: hidden; }
+.hbar > span { display: block; height: 100%; background: var(--bar); border-radius: 3px; }
+.item .thumb { width: 38px; height: 38px; border-radius: 9px; }
+.item.sale-able .who { gap: 8px; }
+.journey { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.journey .step {
+  background: var(--card); border: 1px solid var(--line); border-radius: var(--radius);
+  padding: 12px 14px; display: flex; flex-direction: column; gap: 2px; min-width: 0;
+}
+.journey .step .lbl { font-size: 0.82rem; color: var(--muted); display: flex; align-items: center; gap: 6px; }
+.journey .step .n {
+  flex: none; width: 20px; height: 20px; border-radius: 50%; background: var(--accent); color: #fff;
+  font-size: 0.72rem; font-weight: 700; display: inline-flex; align-items: center; justify-content: center;
+}
+.journey .step b { font-size: 1.25rem; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.journey .step .sub { font-size: 0.78rem; color: var(--muted); }
