@@ -153,6 +153,11 @@ its way before counting the shop it is going to.
 - **New branch:** add a row to `locations` with role `shop`. It appears in every form and on the dashboard.
 - **Someone leaves:** set `active` to `no` in `workers`. Their old entries keep their name.
 - **Forgotten PIN:** change it in `workers`. After 5 wrong PINs, that name is locked for 15 minutes.
+- **Languages:** English and French (Français). Each person picks theirs on the Sign in screen or under **Me**; the phone
+  remembers it, and a phone set to French opens in French. Only the screens change: entries, the sheet and the emailed
+  reports stay in English. Item names come from `docs/i18n.js` by `itemId`, so an item added in the sheet shows its
+  English name in French until it is added there. Adding Kiswahili means adding its dictionaries to `docs/i18n.js`
+  (the file says how); `npm test` lists any text still missing a translation.
 - **Privacy:** the app's code is public on GitHub. The data is not: the sheet only answers to a valid name and PIN.
 - **Updating the app:** after changing any file in `docs/`, raise `VERSION` in `docs/sw.js` and `APP_VERSION` in
   `docs/app.js` together (a test checks they match). Phones switch to the new version the next time the app is opened
@@ -175,6 +180,7 @@ npm test             # stock maths + backend tests
   - `app.js`: screens, offline queue, sync
   - `stock.js`: stock maths (replays movements; counts reset balances)
   - `seed.js`: starting items/places, and demo data
+  - `i18n.js`: other languages (French), item names in French
   - `sw.js`: offline support
 - `backend/Code.gs`: the Google Apps Script backend
 - `tests/`: `npm test`

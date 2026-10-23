@@ -282,3 +282,14 @@ td .who { gap: 8px; }
 }
 .journey .step b { font-size: 1.25rem; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .journey .step .sub { font-size: 0.78rem; color: var(--muted); }
+
+/* Language switch (Sign in and Me): each language written in its own words. */
+.lang {
+  display: inline-flex; align-items: center; gap: 4px; margin: 4px 0 12px; padding: 4px 4px 4px 10px;
+  background: var(--card); border: 1px solid var(--line); border-radius: 14px;
+}
+.lang-btn {
+  min-height: 40px; padding: 6px 14px; border-radius: 10px; border: 0; background: none; color: var(--ink);
+  font: inherit; font-size: 0.9rem; font-weight: 600; cursor: pointer;
+}
+.lang-btn[aria-pressed="true"] { background: var(--accent); color: #fff; }
