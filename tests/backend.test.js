@@ -630,3 +630,25 @@ test('review: keep marks two look-alike entries as both right', () => {
   assert.equal(env.post({ action: 'review', ...mwende, key: 'A|B', decision: 'keep' }).ok, true);
   assert.equal(env.post({ action: 'review', ...mwende, key: 'A|Z', decision: 'keep' }).error, 'not_found');
 });
+
+test('report period: Saturday weekly report covers the 7 days ending Saturday', () => {
+  const { ctx } = load();
+  const p = (x) => JSON.parse(JSON.stringify(x));
+  // 2026-10-10 is a Saturday -> covers 2026-10-04 to 2026-10-10
+  assert.deepEqual(p(ctx.weekEndingSaturday_('2026-10-10')), { start: '2026-10-04', end: '2026-10-10' });
+  // Running on Sunday 2026-10-11 still covers the week ending Saturday 2026-10-10
+  assert.deepEqual(p(ctx.weekEndingSaturday_('2026-10-11')), { start: '2026-10-04', end: '2026-10-10' });
+});
+
+test('dailyOwnerAlert: notifies owner with WhatsApp link if any shop had no sales today', () => {
+  const env = withPlaces(load());
+  env.sheets.workers.rows[0].push('phone');
+  env.sheets.workers.rows[4] = ['Otieno Juma', '3333', 'yes', 'otieno@example.com', 'Nairobi Shop', 'worker', '+254712345678'];
+  // Kiunduani has sales, Nairobi has none
+  env.post({ action: 'save', ...mwende, movements: [sale('k1', { from: 'kiunduani', date: '2026-10-05' })] });
+  const alert = env.ctx.dailyOwnerAlert_(nairobi('2026-10-05T18:30:00'));
+  assert.equal(alert.kind, 'owner_alert');
+  assert.match(alert.places, /Nairobi Shop/);
+  assert.match(env.mail[env.mail.length - 1].subject, /No sales recorded today at Nairobi Shop/);
+  assert.match(env.mail[env.mail.length - 1].body, /wa\.me/);
+});

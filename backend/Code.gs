@@ -471,12 +471,17 @@ function doPost(e) {
 /** Run once from the editor: (re)creates the reminder and report triggers. Safe to run again. */
 function setupReminders() {
   ScriptApp.getProjectTriggers().forEach(function (t) {
-    if (['reminders', 'weeklyReport', 'monthlyReport'].indexOf(t.getHandlerFunction()) >= 0) ScriptApp.deleteTrigger(t);
+    if (['reminders', 'weeklyReport', 'monthlyReport', 'dailyOwnerAlert'].indexOf(t.getHandlerFunction()) >= 0) ScriptApp.deleteTrigger(t);
   });
+  // 1. Staff reminders at 09:00 (for month-end counts) and 18:00 (daily sales reminder)
   [MORNING_HOUR, EVENING_HOUR].forEach(function (h) {
     ScriptApp.newTrigger('reminders').timeBased().everyDays(1).atHour(h).nearMinute(0).inTimezone(TZ).create();
   });
-  ScriptApp.newTrigger('weeklyReport').timeBased().onWeekDay(ScriptApp.WeekDay.MONDAY).atHour(REPORT_HOUR).inTimezone(TZ).create();
+  // 2. Owner daily inactivity alert at 18:30: notifies you if any shop had 0 sales today
+  ScriptApp.newTrigger('dailyOwnerAlert').timeBased().everyDays(1).atHour(18).nearMinute(30).inTimezone(TZ).create();
+  // 3. Weekly Saturday Report at 19:00 EAT (end of business week)
+  ScriptApp.newTrigger('weeklyReport').timeBased().onWeekDay(ScriptApp.WeekDay.SATURDAY).atHour(19).nearMinute(0).inTimezone(TZ).create();
+  // 4. Monthly Report on the 4th at 07:00 EAT
   ScriptApp.newTrigger('monthlyReport').timeBased().onMonthDay(REPORT_MONTH_DAY).atHour(REPORT_HOUR).inTimezone(TZ).create();
 }
 
@@ -571,10 +576,77 @@ function reminders_(now) {
 
 // ---------- reports (owner only) ----------
 
-/** Trigger handler: Monday morning, covers last Monday–Sunday. */
+/** Trigger handler: Saturday evening at 19:00 EAT, covers the 7-day period ending Saturday. */
 function weeklyReport() {
   var today = Utilities.formatDate(new Date(), TZ, 'yyyy-MM-dd');
-  return sendReport_('week', weekBefore_(today), today);
+  return sendReport_('week', weekEndingSaturday_(today), today);
+}
+
+/** The 7-day week ending on the most recent Saturday (or today if Saturday). */
+function weekEndingSaturday_(today) {
+  var d = new Date(today + "T00:00:00Z");
+  var dow = d.getUTCDay(); // 0 = Sun, 6 = Sat
+  var daysSinceSat = (dow === 6) ? 0 : (dow + 1);
+  var end = addDays_(today, -daysSinceSat);
+  var start = addDays_(end, -6);
+  return { start: start, end: end };
+}
+
+/** Trigger handler: 18:30 EAT daily. Proactively emails the owner if any shop recorded zero sales today. */
+function dailyOwnerAlert() {
+  return dailyOwnerAlert_(new Date());
+}
+
+function dailyOwnerAlert_(now) {
+  var today = Utilities.formatDate(now, TZ, 'yyyy-MM-dd');
+  var dayName = Utilities.formatDate(now, TZ, 'd MMM');
+  var moves = liveMovementRows_();
+  if (!moves.length) return null;
+
+  var locs = rows_('locations').filter(function (r) { return r.locationId && String(r.role) === 'shop'; });
+  var workers = rows_('workers').filter(function (w) { return yes_(w.active); }).map(function (w) {
+    return { name: String(w.name).trim(), email: String(w.email || '').trim(), phone: String(w.phone || '').trim(), places: placeIds_(w.place) };
+  });
+
+  var inactiveShops = [];
+  locs.forEach(function (l) {
+    var id = String(l.locationId);
+    var hasSales = moves.some(function (m) { return m.type === 'sale' && String(m.from) === id && date_(m.date) === today; });
+    if (!hasSales) inactiveShops.push(l);
+  });
+
+  if (!inactiveShops.length) return null;
+
+  var ownerEmail = Session.getEffectiveUser().getEmail() || 'beelovefarm25@gmail.com';
+  var inactiveNames = inactiveShops.map(function (s) { return s.name; });
+  var subject = '⚠️ Beelove Alert: No sales recorded today at ' + inactiveNames.join(', ');
+
+  var lines = [
+    'Hello,',
+    '',
+    'The following shop(s) have recorded ZERO sales today (' + dayName + '):',
+    ''
+  ];
+
+  inactiveShops.forEach(function (s) {
+    var shopStaff = workers.filter(function (w) { return w.places.indexOf(String(s.locationId)) >= 0; });
+    lines.push('• ' + s.name + ':');
+    if (shopStaff.length) {
+      shopStaff.forEach(function (w) {
+        var cleanPhone = w.phone.replace(/[^0-9]/g, '');
+        var waMsg = encodeURIComponent('Hello ' + w.name + ', please remember to record today\'s sales and stock in the BeeLove Inventory app before closing: ' + APP_URL);
+        lines.push('   Staff: ' + w.name + (w.email ? ' (' + w.email + ')' : ''));
+        if (cleanPhone) lines.push('   WhatsApp Nudge: https://wa.me/' + cleanPhone + '?text=' + waMsg);
+      });
+    } else {
+      lines.push('   (No staff assigned in the workers sheet)');
+    }
+  });
+
+  lines.push('', 'Automated reminder emails have been sent to shop staff.', 'Open the inventory dashboard to check: ' + APP_URL, '', 'Beelove Stock App');
+
+  MailApp.sendEmail(ownerEmail, subject, lines.join('\n'));
+  return { to: ownerEmail, kind: 'owner_alert', places: inactiveNames.join(', ') };
 }
 
 /** Trigger handler: on REPORT_MONTH_DAY, covers the whole previous month. */
